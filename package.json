@@ -1,0 +1,29 @@
+{
+  "name": "ops-pilot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "arena": "tsx src/arena.ts",
+    "bench": "src/bench.ts",
+    "test": "node --import tsx --test ~src/**/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@langchain/core": "latest",
+    "@langchain/langgraph": "latest",
+    "@langchain/openai": "latest",
+    "express": "latest",
+    "pg": "latest",
+    "sequelize": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@types/express": "latest",
+    "@types/node": "latest",
+    "@types/sequelize": "latest",
+    "tsx": "latest",
+    "typescript": "latest"
+  }
+}
