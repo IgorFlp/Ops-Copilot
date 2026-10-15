@@ -1,0 +1,133 @@
+openapi: 3.1.0
+info:
+  title: OpsPilot Reasoning Arena
+  version: 1.0.0
+paths:
+  /arena:
+    post:
+      summary: Run selected operational reasoning strategies
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArenaRequest"
+            example:
+              input: "What alerts are firing?"
+              strategies:
+                - react
+                - plan-and-execute
+              maxIterations: 8
+      responses:
+        "200":
+          description: A separate answer, trace, and metrics result for each selected strategy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArenaResponse"
+        "400":
+          description: Request schema, strategy selection, or iteration limit is invalid.
+        "500":
+          description: Model, database, or operational execution failed.
+components:
+  schemas:
+    ArenaRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - input
+      properties:
+        input:
+          type: string
+          minLength: 1
+          maxLength: 20000
+        strategies:
+          type: array
+          minItems: 1
+          maxItems: 2
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+              - react
+              - plan-and-execute
+          description: Omit to run both available strategies.
+        maxIterations:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 8
+    ArenaResponse:
+      type: object
+      required:
+        - input
+        - results
+      properties:
+        input:
+          type: string
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/StrategyResult"
+    StrategyResult:
+      type: object
+      required:
+        - strategy
+        - result
+      properties:
+        strategy:
+          type: string
+          enum:
+            - react
+            - plan-and-execute
+        result:
+          $ref: "#/components/schemas/ReasoningResult"
+    ReasoningResult:
+      type: object
+      required:
+        - answer
+        - trace
+        - metrics
+      properties:
+        answer:
+          type: string
+        trace:
+          type: array
+          items:
+            $ref: "#/components/schemas/TraceEvent"
+        metrics:
+          type: object
+          required:
+            - calls
+            - latencyMs
+          properties:
+            calls:
+              type: integer
+              minimum: 0
+            latencyMs:
+              type: number
+              minimum: 0
+    TraceEvent:
+      type: object
+      required:
+        - type
+        - content
+      properties:
+        type:
+          type: string
+          enum:
+            - thought
+            - action
+            - observation
+            - plan
+            - critique
+            - answer
+        content:
+          type: string
+        tools:
+          type: array
+          items:
+            type: string
+        args:
+          type: object
+          additionalProperties: true

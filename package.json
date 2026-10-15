@@ -4,10 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx src/index.ts",
-    "arena": "tsx src/arena.ts",
+    "dev": "node --env-file-if-exists=.env --import tsx src/index.ts",
+    "predev": "npm run seed",
+    "seed": "node --env-file-if-exists=.env --import tsx scripts/seed.ts",
     "bench": "src/bench.ts",
-    "test": "node --import tsx --test ~src/**/*.test.ts",
+    "test": "node --import tsx --test src/**/*.test.ts scripts/**/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
