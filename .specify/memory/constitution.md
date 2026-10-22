@@ -1,11 +1,10 @@
 <!--
 Sync Impact Report
-Version change: 1.0.1 -> 1.1.0 (clarified HTTP-only scope and materially expanded MVC responsibilities)
+Version change: 1.1.0 -> 1.2.0 (allows a developer CLI alongside the HTTP API)
 Modified principles:
-- 1. Explicit MVC layers (clarified HTTP-only scope and expanded layer responsibilities)
-- 2. Zod at external boundaries (HTTP-only input validation)
+- 2. Validated HTTP and developer CLI boundaries (CLI permitted for local system testing)
 Added sections: None
-Removed sections: CLI scope
+Removed sections: HTTP-only restriction on CLI scope
 Follow-up TODO: Confirm the original ratification date.
 -->
 
@@ -22,9 +21,10 @@ Princípios não negociáveis para toda especificação, plano, tarefa e código
    Controllers recebem requisições HTTP, validam a entrada, chamam services e
    traduzem resultados e erros em respostas HTTP. O domínio não realiza IO
    diretamente nem depende da camada HTTP.
-2. **Validação na fronteira HTTP:** valide com Zod toda entrada externa recebida
+2. **Validação nas fronteiras externas:** valide com Zod toda entrada recebida
    pela API antes de encaminhá-la aos services e à lógica de domínio. O projeto
-   não possui interface CLI.
+   pode oferecer uma interface CLI de desenvolvimento para testar o sistema; essa
+   interface também deve validar argumentos e reutilizar os mesmos services.
 3. **Erros são de domínio:** represente falhas previsíveis com classes de erro de
    domínio e traduza-as na borda para respostas adequadas. Não exponha erros internos.
 4. **Teste é parte da tarefa:** lógica nova nasce com testes usando `node:test` via
@@ -63,4 +63,4 @@ MINOR para novos princípios ou expansão material de diretrizes, PATCH para
 clarificações e mudanças não semânticas. Confirme a data original de ratificação
 quando conhecida e atualize a data da última alteração em cada emenda aprovada.
 
-**Version**: 1.1.0 | **Ratified**: TODO(RATIFICATION_DATE): original date unknown | **Last Amended**: 2026-10-14
+**Version**: 1.2.0 | **Ratified**: TODO(RATIFICATION_DATE): original date unknown | **Last Amended**: 2026-10-15

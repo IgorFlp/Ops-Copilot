@@ -53,6 +53,7 @@ As an operations engineer, I need to submit one HTTP request to run one or more 
 2. **Given** the plan-and-execute strategy, **When** it processes a question, **Then** it creates a structured plan, executes one step at a time, and revises the remaining steps after each execution until none remain or a configured limit is reached.
 3. **Given** a run reaches its iteration limit or the plan reaches eight steps, **When** the limit is reached, **Then** the strategy stops and returns the work completed so far with accurate metrics.
 4. **Given** an invalid request, unknown strategy name, or invalid iteration limit, **When** the arena receives it, **Then** it returns an explicit client error without starting an invalid run.
+5. **Given** a request to analyze incidents and create a remediation plan without asking to change incident state, **When** plan-and-execute runs, **Then** it may inspect alerts but MUST NOT open or resolve incidents.
 
 ### User Story 4 - Reproduce sample data and verify output offline (Priority: P3)
 
@@ -92,11 +93,12 @@ As a developer or evaluator, I need repeatable sample operational records and de
 - **FR-007**: The incident-resolution operation MUST accept an existing open incident identifier, persist the resolved state, and explicitly reject unknown or already resolved incidents.
 - **FR-008**: The seed process MUST produce five services and six varied alerts, with exactly three firing and three resolved alerts. Re-running it MUST not duplicate its fixtures or delete unrelated records. The development setup MUST run the seed so the initial sample data is available.
 - **FR-009**: The ReAct strategy MUST use the prebuilt ReAct agent with the operational tools and capture the complete sequence of externally observable reasoning, plan, tool action, observation, critique, and answer events.
-- **FR-010**: The plan-and-execute strategy MUST create a structured list of steps, execute at most one step before replanning, and revise the remaining plan after each step. It MUST stop when no steps remain, its iteration limit is reached, or eight steps have been considered.
+- **FR-010**: The plan-and-execute strategy MUST create a structured list of short, ordered step descriptions, execute operational steps by selecting and invoking an available validated tool, and handle analysis steps using completed observations without invoking a tool. It MUST replan after each step. It MUST invoke incident-opening or incident-resolution tools only when the user explicitly requests that state change; requests to create a plan, report, or recommendation MUST NOT be interpreted as incident mutations. The replanner MUST decide whether to adjust the remaining plan, continue it, or finish. The strategy MUST stop when no steps remain, its iteration limit is reached, or eight steps have been considered. Invalid or missing planner, executor, or replanner output MUST be surfaced as an explicit stage error rather than an unhandled property-access failure.
 - **FR-011**: Every strategy MUST enforce its configured iteration limit and count every LLM invocation it makes, including planning and replanning calls.
 - **FR-012**: The arena MUST expose an HTTP operation that accepts one shared input, an optional selection of one or more strategies, and an optional iteration limit from 1 through 100; it MUST return a separate answer, trace, and metrics for every selected strategy. If strategies are omitted, it MUST run both available strategies. The default iteration limit MUST be eight. Invalid requests MUST receive an explicit client error.
 - **FR-013**: Tests for the operational store and trace formatting MUST be deterministic and MUST NOT require network access.
 - **FR-014**: A failed model, database, or tool operation MUST be surfaced as a failure and MUST NOT be represented as a successful answer or state change.
+- **FR-015**: The application MUST provide a developer CLI via `npm run arena -- "input"` with optional `--strategies` and `--max-iterations` flags. It MUST print each selected strategy's answer, typed trace, call count, and latency, and exit non-zero with an explicit error when parsing or execution fails.
 
 ### Key Entities *(include if feature involves data)*
 

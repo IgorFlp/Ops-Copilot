@@ -17,6 +17,65 @@ export interface IncidentServiceStore {
   resolveIncident(id: number): Promise<IncidentRecord>;
 }
 
+export interface ServiceReference {
+  id: number;
+  name: string;
+  slug: string;
+}
+
+function normalizeServiceReference(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[\s_-]*api$/i, "")
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function differsByOneCharacter(left: string, right: string): boolean {
+  if (Math.abs(left.length - right.length) > 1) return false;
+  let leftIndex = 0;
+  let rightIndex = 0;
+  let differences = 0;
+  while (leftIndex < left.length && rightIndex < right.length) {
+    if (left[leftIndex] === right[rightIndex]) {
+      leftIndex += 1;
+      rightIndex += 1;
+      continue;
+    }
+    differences += 1;
+    if (differences > 1) return false;
+    if (left.length > right.length) leftIndex += 1;
+    else if (right.length > left.length) rightIndex += 1;
+    else {
+      leftIndex += 1;
+      rightIndex += 1;
+    }
+  }
+  return differences + Number(leftIndex < left.length || rightIndex < right.length) <= 1;
+}
+
+export function findServiceByReference<T extends ServiceReference>(
+  reference: string,
+  services: T[],
+): T | undefined {
+  const normalized = normalizeServiceReference(reference);
+  if (!normalized) return undefined;
+  const exactMatches = services.filter(
+    (service) =>
+      normalizeServiceReference(service.slug) === normalized ||
+      normalizeServiceReference(service.name) === normalized,
+  );
+  if (exactMatches.length === 1) return exactMatches[0];
+  if (exactMatches.length > 1 || normalized.length < 5) return undefined;
+  const closeMatches = services.filter((service) =>
+    [service.slug, service.name].some((candidate) =>
+      differsByOneCharacter(normalizeServiceReference(candidate), normalized),
+    ),
+  );
+  return closeMatches.length === 1 ? closeMatches[0] : undefined;
+}
+
 function toIncidentRecord(
   incident: Incident,
   service: Service,
@@ -58,14 +117,19 @@ const databaseStore: IncidentServiceStore = {
   async openIncident(input) {
     await ensureDatabaseReady();
     return sequelize.transaction(async (transaction) => {
-      const service = await Service.findOne({
-        where: { slug: input.service },
+      const services = await Service.findAll({
+        attributes: ["id", "name", "slug"],
+        transaction,
+      });
+      const serviceReference = findServiceByReference(input.service, services);
+      if (!serviceReference) {
+        throw new DomainError(`Service not found: ${input.service}`, "NOT_FOUND");
+      }
+      const service = await Service.findByPk(serviceReference.id, {
         transaction,
         lock: transaction.LOCK.UPDATE,
       });
-      if (!service) {
-        throw new DomainError("Service not found", "NOT_FOUND");
-      }
+      if (!service) throw new DomainError("Service not found", "NOT_FOUND");
       const incident = await Incident.create(
         {
           serviceId: service.id,

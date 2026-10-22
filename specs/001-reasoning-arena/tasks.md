@@ -10,7 +10,7 @@
 
 ## Phase 1: Setup
 
-**Purpose**: Align project scripts with the approved HTTP-only arena design and provide a repeatable seed command.
+**Purpose**: Align project scripts with the HTTP arena design and provide a repeatable seed command.
 
 - [x] T001 Update `package.json` scripts to remove the CLI arena entry point and register `npm run seed` for `tsx scripts/seed.ts`.
 
@@ -67,7 +67,7 @@
 - [x] T014 [P] [US2] Implement the single OpenRouter chat-model factory in `src/agents/model.ts`, reading `OPENROUTER_API_KEY` and `OPENROUTER_MODEL`, configuring the OpenRouter base URL and temperature `0`, and explicitly rejecting missing configuration.
 - [x] T015 [P] [US2] Implement deterministic rendering of typed trace events in `src/lib/trace-format.ts`, preserving event order and action tool arguments while rendering only user-facing thought summaries.
 - [x] T016 [US2] Implement the ReAct strategy using LangGraph's prebuilt ReAct agent and the three operational tools in `src/agents/react.ts`; capture externally observable model/tool events, count model calls, enforce the iteration limit, and return the common result type.
-- [x] T017 [US2] Implement the plan-and-execute graph in `src/agents/plan-and-execute.ts` with structured planning output, one tool-backed step per executor invocation, replanning after each step, an eight-step ceiling, the configured iteration limit, and accurate call/latency metrics.
+- [x] T017 [US2] Implement the plan-and-execute graph in `src/agents/plan-and-execute.ts` with structured ordered string steps, one OpenRouter-backed tool selection and invocation per executor step, replanner decisions to adjust/continue/finish, an eight-step ceiling, the configured iteration limit, and accurate call/latency metrics.
 
 **Checkpoint**: Both strategies return the common result contract and traces without exposing private chain-of-thought or converting failures into successful answers.
 
@@ -91,7 +91,7 @@
 - [x] T022 [US3] Implement the Zod-validated HTTP controller in `src/controllers/arena-controller.ts`; default omitted strategies to both implementations, default the iteration limit to eight, and map invalid requests and operational failures to explicit HTTP errors.
 - [x] T023 [US3] Register the arena HTTP route in `src/routes/arena-routes.ts` and mount it through `src/app.ts`; return each strategy's answer, ordered trace, call count, and latency in the response.
 
-**Checkpoint**: Operators can compare strategies over HTTP with validated input and isolated results; no CLI is introduced.
+**Checkpoint**: Operators can compare strategies over HTTP with validated input and isolated results; the developer CLI is added separately in Phase 8.
 
 ---
 
@@ -121,6 +121,17 @@
 - [x] T027 [P] Write the runnable setup, seed, HTTP arena request examples, and expected responses in `specs/001-reasoning-arena/quickstart.md`, including deterministic offline test commands and PostgreSQL prerequisites.
 - [x] T028 Run `npm run typecheck` and `npm test` from the repository root; fix any feature-related failures in the affected `src/`, `scripts/`, or `package.json` files and confirm both commands pass.
 - [ ] T029 Run the documented seed-twice and HTTP arena scenarios from `specs/001-reasoning-arena/quickstart.md`; record expected fixture counts and verify answers, trace types, calls, and latency are present.
+
+---
+
+## Phase 8: Developer CLI
+
+**Purpose**: Provide the explicitly requested local command-line entry point alongside the HTTP endpoint.
+
+- [x] T030 Add `npm run arena -- "input" --strategies react` with validated strategy and iteration flags, database lifecycle handling, JSON answers/traces/metrics output, deterministic CLI tests, and updated project scope documentation in `src/arena.ts`, `src/arena-cli.ts`, `src/arena-cli.test.ts`, `package.json`, `specs/001-reasoning-arena/`, and `.specify/memory/constitution.md`.
+- [x] T031 Support short/canonical service references and unique single-character typos, seed Catalog API while retaining five service fixtures, strengthen planner/executor prompts for ordered explicit actions, reject empty plans for explicit operational commands, and add deterministic coverage in `src/services/incident-service.ts`, `src/services/incident-service.test.ts`, `scripts/seed.ts`, `scripts/seed.test.ts`, `src/agents/plan-and-execute.ts`, and `src/agents/plan-and-execute.test.ts`.
+- [x] T032 Add stage-specific model/tool failure context and include prior completed step observations when an execution fails in `src/agents/plan-and-execute.ts`, with deterministic partial-completion diagnostics coverage in `src/agents/plan-and-execute.test.ts`.
+- [x] T033 Pass completed observations to each plan executor call, normalize `incident_id`/`incidentId` to the required numeric `id` for resolve tools, and verify the sequential open-then-resolve flow in `src/agents/plan-and-execute.ts`, `src/agents/tools.ts`, `src/agents/plan-and-execute.test.ts`, and `src/agents/tools.test.ts`.
 
 ---
 

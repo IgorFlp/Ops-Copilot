@@ -79,6 +79,15 @@ test("seed is idempotent and preserves unrelated services and alerts", async () 
   assert.equal(secondSnapshot, firstSnapshot);
   assert.equal(services.size, 6);
   assert.equal(alerts.size, 7);
+  for (const slug of [
+    "payments-api",
+    "checkout-api",
+    "orders-api",
+    "inventory-api",
+    "catalog-api",
+  ]) {
+    assert.equal(services.has(slug), true);
+  }
   assert.equal(
     [...alerts.values()].filter((alert) => alert.fixtureKey.startsWith("opspilot-seed") && alert.status === "firing").length,
     3,

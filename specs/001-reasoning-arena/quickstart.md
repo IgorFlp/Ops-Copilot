@@ -23,6 +23,7 @@ Seeded 5 services and 6 alerts (3 firing, 3 resolved).
 ```
 
 The seed uses fixture keys and upserts records; running it again must keep the fixture counts unchanged and preserve unrelated services and alerts.
+The five seeded services are Payments API, Checkout API, Orders API, Inventory API, and Catalog API. The arena CLI idempotently ensures these service fixtures exist before running a strategy; it does not reseed or reset alert statuses.
 
 ## Run deterministic checks
 
@@ -32,6 +33,24 @@ npm test
 ```
 
 The service/store, tool, seed fixture, strategy, arena service, and trace-formatting tests use deterministic fixtures and do not call OpenRouter. Database integration requires the configured PostgreSQL database.
+
+## Run the arena from the CLI
+
+Run one strategy with an input prompt:
+
+```powershell
+npm run arena -- "What alerts are firing?" --strategies react
+```
+
+Choose the other strategy or run both, and optionally set the iteration limit:
+
+```powershell
+npm run arena -- "Investigate current alerts" --strategies plan-and-execute --max-iterations 4
+npm run arena -- "How is the on-call shift?" --strategies react,plan-and-execute
+```
+
+If `--strategies` is omitted, both strategies run. The CLI reads the same `.env` configuration as the HTTP service, connects to PostgreSQL, and prints each strategy's answer, typed trace, LLM-call count, and latency as JSON. Invalid arguments or operational failures are written to stderr and return a non-zero exit code.
+Run `npm run seed` when you want to create or refresh the sample alert fixtures. The arena CLI ensures the five service fixtures exist without resetting alert statuses.
 
 ## Start the HTTP service
 

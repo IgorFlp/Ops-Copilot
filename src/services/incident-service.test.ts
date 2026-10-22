@@ -4,8 +4,25 @@ import { DomainError } from "../errors/domain-error.js";
 import { AlertRecord, IncidentRecord } from "../agents/types.js";
 import {
   createIncidentService,
+  findServiceByReference,
   IncidentServiceStore,
 } from "./incident-service.js";
+
+test("matches canonical service names, slugs, short names, and a unique typo", () => {
+  const services = [
+    { id: 1, slug: "checkout-api", name: "Checkout API" },
+    { id: 2, slug: "payments-api", name: "Payments API" },
+    { id: 3, slug: "catalog-api", name: "Catalog API" },
+  ];
+
+  assert.equal(findServiceByReference("checkout-api", services)?.id, 1);
+  assert.equal(findServiceByReference("Checkout API", services)?.id, 1);
+  assert.equal(findServiceByReference("checkout", services)?.id, 1);
+  assert.equal(findServiceByReference("chekout", services)?.id, 1);
+  assert.equal(findServiceByReference("payments", services)?.id, 2);
+  assert.equal(findServiceByReference("catalog", services)?.id, 3);
+  assert.equal(findServiceByReference("unknown", services), undefined);
+});
 
 function createMemoryStore(): IncidentServiceStore {
   const alerts: AlertRecord[] = [

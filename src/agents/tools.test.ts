@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { DomainError } from "../errors/domain-error.js";
 import { AlertRecord, IncidentRecord } from "./types.js";
-import { createOpsTools } from "./tools.js";
+import { createOpsTools, normalizeToolArguments } from "./tools.js";
 
 test("tools expose expected names, defaults, and serialized service results", async () => {
   const calls: string[] = [];
@@ -54,13 +54,65 @@ test("tools expose expected names, defaults, and serialized service results", as
   assert.equal(await tools[1].invoke({
     title: "Latency",
     service: "payments",
-    severity: "high",
+    severity: "SEV-2",
   }).then((result) => JSON.parse(String(result)).id), 10);
   assert.equal(
     JSON.parse(String(await tools[2].invoke({ id: 10 }))).status,
     "resolved",
   );
   assert.deepEqual(calls, ["list:firing", "open:payments", "resolve:10"]);
+});
+
+test("maps SEV-1 through SEV-4 to supported incident severities", async () => {
+  const severities: string[] = [];
+  const tools = createOpsTools({
+    async listAlerts() {
+      return [];
+    },
+    async openIncident(input) {
+      severities.push(input.severity);
+      return {
+        id: severities.length,
+        serviceId: 1,
+        service: "Payments",
+        title: input.title,
+        severity: input.severity,
+        status: "open",
+      };
+    },
+    async resolveIncident(id) {
+      throw new Error(`Unexpected resolve: ${id}`);
+    },
+  });
+
+  for (const severity of ["SEV-1", "sev2", "Sev 3", "SEV4"]) {
+    await tools[1].invoke({
+      title: "Operational incident",
+      service: "payments",
+      severity,
+    });
+  }
+
+  assert.deepEqual(severities, ["critical", "high", "medium", "low"]);
+});
+
+test("normalizes incident_id aliases and numeric strings for incident resolution", () => {
+  assert.deepEqual(
+    normalizeToolArguments("resolve_incidente", { incident_id: 2 }),
+    { incident_id: 2, id: 2 },
+  );
+  assert.deepEqual(
+    normalizeToolArguments("resolve_incidente", { incidentId: "3" }),
+    { incidentId: "3", id: 3 },
+  );
+  assert.throws(
+    () =>
+      normalizeToolArguments("resolve_incidente", {
+        id: 2,
+        incident_id: 3,
+      }),
+    /Conflicting incident identifiers/,
+  );
 });
 
 test("tools reject malformed schemas before calling the service", async () => {

@@ -2,14 +2,10 @@ import type { AlertStatus } from "../src/models/alert.js";
 import { ensureDatabaseReady, sequelize } from "../src/models/database.js";
 import { Service } from "../src/models/service.js";
 import { Alert } from "../src/models/alert.js";
+import { ensureServiceFixtures } from "../src/services/service-fixtures.js";
+import type { ServiceFixture } from "../src/services/service-fixtures.js";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-
-interface ServiceSeed {
-  slug: string;
-  name: string;
-  description: string;
-}
 
 interface AlertSeed {
   fixtureKey: string;
@@ -18,34 +14,6 @@ interface AlertSeed {
   description: string;
   status: AlertStatus;
 }
-
-const serviceFixtures: ServiceSeed[] = [
-  {
-    slug: "payments-api",
-    name: "Payments API",
-    description: "Processes customer payments.",
-  },
-  {
-    slug: "checkout-api",
-    name: "Checkout API",
-    description: "Coordinates checkout sessions.",
-  },
-  {
-    slug: "orders-api",
-    name: "Orders API",
-    description: "Creates and tracks customer orders.",
-  },
-  {
-    slug: "inventory-api",
-    name: "Inventory API",
-    description: "Tracks product inventory.",
-  },
-  {
-    slug: "notifications",
-    name: "Notifications",
-    description: "Delivers customer notifications.",
-  },
-];
 
 const alertFixtures: AlertSeed[] = [
   {
@@ -78,9 +46,9 @@ const alertFixtures: AlertSeed[] = [
   },
   {
     fixtureKey: "opspilot-seed-notifications-recovered",
-    service: "notifications",
-    title: "Notification delivery recovered",
-    description: "Notification delivery latency returned to normal.",
+    service: "catalog-api",
+    title: "Catalog synchronization recovered",
+    description: "Catalog synchronization returned to normal.",
     status: "resolved",
   },
   {
@@ -93,18 +61,14 @@ const alertFixtures: AlertSeed[] = [
 ];
 
 export interface SeedStore {
-  upsertService(service: ServiceSeed): Promise<{ id: number }>;
+  upsertService(service: ServiceFixture): Promise<{ id: number }>;
   upsertAlert(
     alert: AlertSeed & { serviceId: number },
   ): Promise<void>;
 }
 
 export async function seedOperationalData(store: SeedStore): Promise<void> {
-  const serviceIds = new Map<string, number>();
-  for (const fixture of serviceFixtures) {
-    const service = await store.upsertService(fixture);
-    serviceIds.set(fixture.slug, service.id);
-  }
+  const serviceIds = await ensureServiceFixtures(store);
 
   for (const fixture of alertFixtures) {
     const serviceId = serviceIds.get(fixture.service);
