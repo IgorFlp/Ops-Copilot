@@ -2,8 +2,14 @@ import { AIMessage, BaseMessage, HumanMessage, ToolMessage } from "@langchain/co
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { DomainError } from "../errors/domain-error.js";
 import { createModel } from "./model.js";
-import { ReasoningResult, ReasoningStrategy, TraceEvent } from "./types.js";
-import { opsTools } from "./tools.js";
+import {
+  ReasoningResult,
+  ReasoningStrategy,
+  ReflectionContext,
+  StrategyRunOptions,
+  TraceEvent,
+} from "./types.js";
+import { createOpsTools } from "./tools.js";
 
 const DEFAULT_MAX_ITERATIONS = 8;
 const MAX_ITERATIONS = 100;
@@ -12,21 +18,32 @@ type ReactAgentOutput = { messages: BaseMessage[] };
 type ReactAgentInvoker = (
   input: string,
   maxIterations: number,
+  reflectionContext?: ReflectionContext,
 ) => Promise<ReactAgentOutput>;
 
 async function invokeAgent(
   input: string,
   maxIterations: number,
+  reflectionContext?: ReflectionContext,
 ): Promise<ReactAgentOutput> {
+  const retryContext = reflectionContext
+    ? [
+        "\n\nReflection retry context:",
+        `Prior critique feedback:\n${reflectionContext.feedback.join("\n") || "(none)"}`,
+        `Previously observed facts:\n${reflectionContext.observations.join("\n") || "(none)"}`,
+        `Previously completed state-changing actions:\n${JSON.stringify(reflectionContext.completedActions)}`,
+        "Do not repeat any successfully completed state-changing action listed above. Continue from the completed work and provide a revised answer.",
+      ].join("\n")
+    : "";
   const agent = createReactAgent({
     llm: createModel(),
-    tools: [...opsTools],
+    tools: [...createOpsTools(undefined, reflectionContext?.completedActions)],
     prompt:
       "Act as an operations assistant. Use operational tools when needed. " +
       "Provide concise user-facing summaries; never reveal private reasoning.",
   });
   return agent.invoke(
-    { messages: [new HumanMessage(input)] },
+    { messages: [new HumanMessage(`${input}${retryContext}`)] },
     { recursionLimit: maxIterations * 2 + 1 },
   );
 }
@@ -47,12 +64,21 @@ function messageText(content: BaseMessage["content"]): string {
 
 function buildTrace(messages: BaseMessage[]): TraceEvent[] {
   const trace: TraceEvent[] = [];
+  const calls = new Map<
+    string,
+    { name: string; args: Record<string, unknown> }
+  >();
   for (const message of messages) {
     if (
       message instanceof AIMessage &&
       (message.tool_calls?.length ?? 0) > 0
     ) {
       const toolCalls = message.tool_calls ?? [];
+      for (const call of toolCalls) {
+        if (call.id) {
+          calls.set(call.id, { name: call.name, args: call.args });
+        }
+      }
       trace.push({
         type: "action",
         content: "Requested operational tool execution",
@@ -65,9 +91,11 @@ function buildTrace(messages: BaseMessage[]): TraceEvent[] {
               ),
       });
     } else if (message instanceof ToolMessage) {
+      const call = calls.get(message.tool_call_id);
       trace.push({
         type: "observation",
         content: messageText(message.content),
+        ...(call ? { tools: [call.name], args: call.args } : {}),
       });
     } else if (
       message instanceof AIMessage &&
@@ -85,7 +113,10 @@ export function createReactStrategy(
 ): ReasoningStrategy {
   return {
     name: "react",
-    async run(input, options = {}): Promise<ReasoningResult> {
+    async run(
+      input,
+      options: StrategyRunOptions = {},
+    ): Promise<ReasoningResult> {
       if (!input.trim()) {
         throw new DomainError("Input is required", "VALIDATION");
       }
@@ -102,7 +133,11 @@ export function createReactStrategy(
       }
 
       const started = Date.now();
-      const { messages } = await invoker(input, maxIterations);
+      const { messages } = await invoker(
+        input,
+        maxIterations,
+        options.reflectionContext,
+      );
       const answer = [...messages]
         .reverse()
         .find(

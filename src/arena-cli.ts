@@ -4,17 +4,21 @@ import type { ArenaResult } from "./services/arena-service.js";
 const strategyNames: ReadonlySet<string> = new Set([
   "react",
   "plan-and-execute",
+  "reflect:react",
+  "reflect:plan-and-execute",
 ]);
 
 export interface ArenaCliOptions {
   input: string;
   strategies?: string[];
   maxIterations?: number;
+  maxReflection?: number;
 }
 
 export interface NpmCliConfig {
   strategies?: string;
   maxIterations?: string;
+  maxReflection?: string;
 }
 
 export function parseArenaCliArguments(
@@ -22,11 +26,13 @@ export function parseArenaCliArguments(
   npmConfig: NpmCliConfig = {
     strategies: process.env.npm_config_strategies,
     maxIterations: process.env.npm_config_max_iterations,
+    maxReflection: process.env.npm_config_max_reflection,
   },
 ): ArenaCliOptions {
   const positional: string[] = [];
   let strategies: string[] | undefined;
   let maxIterations: number | undefined;
+  let maxReflection: number | undefined;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -60,6 +66,27 @@ export function parseArenaCliArguments(
         );
       }
       index += 1;
+    } else if (arg === "--max-reflection") {
+      const value = args[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new DomainError(
+          "--max-reflection requires an integer from 0 to 100",
+          "VALIDATION",
+        );
+      }
+      maxReflection = Number(value);
+      if (
+        !/^\d+$/.test(value) ||
+        !Number.isSafeInteger(maxReflection) ||
+        maxReflection < 0 ||
+        maxReflection > 100
+      ) {
+        throw new DomainError(
+          "--max-reflection must be an integer from 0 to 100",
+          "VALIDATION",
+        );
+      }
+      index += 1;
     } else if (arg.startsWith("--")) {
       throw new DomainError(`Unknown option: ${arg}`, "VALIDATION");
     } else {
@@ -75,6 +102,36 @@ export function parseArenaCliArguments(
         if (/^\d+$/.test(positional[index])) {
           valueIndex = index;
           break;
+        }
+        if (maxReflection === undefined && npmConfig.maxReflection) {
+          let value = npmConfig.maxReflection;
+          if (value === "true") {
+            let valueIndex = -1;
+            for (let index = positional.length - 1; index >= 0; index -= 1) {
+              if (/^\d+$/.test(positional[index])) {
+                valueIndex = index;
+                break;
+              }
+            }
+            value =
+              valueIndex === -1
+                ? positional.pop() ?? ""
+                : positional.splice(valueIndex, 1)[0];
+          } else if (positional.at(-1) === value) {
+            positional.pop();
+          }
+          maxReflection = Number(value);
+          if (
+            !/^\d+$/.test(value) ||
+            !Number.isSafeInteger(maxReflection) ||
+            maxReflection < 0 ||
+            maxReflection > 100
+          ) {
+            throw new DomainError(
+              "--max-reflection must be an integer from 0 to 100",
+              "VALIDATION",
+            );
+          }
         }
       }
       value =
@@ -117,7 +174,7 @@ export function parseArenaCliArguments(
 
   if (positional.length === 0 || !positional.join(" ").trim()) {
     throw new DomainError(
-      'Usage: npm run arena -- "input" [--strategies react,plan-and-execute] [--max-iterations 8]',
+      'Usage: npm run arena -- "input" [--strategies react,plan-and-execute,reflect:react,reflect:plan-and-execute] [--max-iterations 8] [--max-reflection 2]',
       "VALIDATION",
     );
   }
@@ -137,6 +194,7 @@ export function parseArenaCliArguments(
     input: positional.join(" ").trim(),
     ...(strategies ? { strategies } : {}),
     ...(maxIterations === undefined ? {} : { maxIterations }),
+    ...(maxReflection === undefined ? {} : { maxReflection }),
   };
 }
 

@@ -6,9 +6,11 @@ import { invokeOpsTool, normalizeToolArguments } from "./tools.js";
 import {
   ReasoningResult,
   ReasoningStrategy,
+  ReflectionContext,
   StrategyRunOptions,
   TraceEvent,
 } from "./types.js";
+import { priorMutationObservation } from "./tools.js";
 
 const DEFAULT_MAX_ITERATIONS = 8;
 const MAX_ITERATIONS = 100;
@@ -275,11 +277,12 @@ export function parseReplannerOutput(value: unknown): ReplannerOutput {
 }
 
 export interface PlanExecutionDependencies {
-  plan(input: string): Promise<PlannerOutput>;
+  plan(input: string, reflectionContext?: ReflectionContext): Promise<PlannerOutput>;
   execute(
     step: PlanStep,
     done: CompletedStep[],
     input: string,
+    reflectionContext?: ReflectionContext,
   ): Promise<ExecutionOutput>;
   replan(
     input: string,
@@ -289,7 +292,7 @@ export interface PlanExecutionDependencies {
 }
 
 const modelDependencies: PlanExecutionDependencies = {
-  async plan(input) {
+  async plan(input, reflectionContext) {
     const planner = createModel().withStructuredOutput(planSchema, {
       method: "functionCalling",
       includeRaw: true,
@@ -309,7 +312,19 @@ const modelDependencies: PlanExecutionDependencies = {
             "For an incident request, include its requested service, title, and severity in the step. " +
             "Return an empty plan only when the user asks a question that can be answered without an operational tool.",
         ],
-        ["user", input],
+        [
+          "user",
+          JSON.stringify({
+            input,
+            reflectionContext: reflectionContext
+              ? {
+                  feedback: reflectionContext.feedback,
+                  observations: reflectionContext.observations,
+                  completedActions: reflectionContext.completedActions,
+                }
+              : undefined,
+          }),
+        ],
       ]);
     } catch (error) {
       throw stageError("Planner model call", error);
@@ -317,7 +332,7 @@ const modelDependencies: PlanExecutionDependencies = {
     const output = parsePlannerOutput(result);
     return { steps: output.steps, answer: output.answer };
   },
-  async execute(step, done, input) {
+  async execute(step, done, input, reflectionContext) {
     const canOpenIncident = isMutationAuthorized(input, "open_incidente");
     const canResolveIncident = isMutationAuthorized(input, "resolve_incidente");
     const availableTools = [
@@ -357,6 +372,13 @@ const modelDependencies: PlanExecutionDependencies = {
             completedSteps: done,
             canOpenIncident,
             canResolveIncident,
+            reflectionContext: reflectionContext
+              ? {
+                  feedback: reflectionContext.feedback,
+                  observations: reflectionContext.observations,
+                  completedActions: reflectionContext.completedActions,
+                }
+              : undefined,
           }),
         ],
       ]);
@@ -375,6 +397,23 @@ const modelDependencies: PlanExecutionDependencies = {
           `Refusing to execute ${selection.tool}: the request did not explicitly ask to change incident state`,
         ),
       );
+    }
+    if (
+      selection.tool === "open_incidente" ||
+      selection.tool === "resolve_incidente"
+    ) {
+      const previous = priorMutationObservation(
+        reflectionContext?.completedActions ?? [],
+        selection.tool,
+        args,
+      );
+      if (previous !== undefined) {
+        return {
+          tool: selection.tool,
+          args,
+          observation: previous,
+        };
+      }
     }
     let result: unknown;
     try {
@@ -471,7 +510,10 @@ export function createPlanAndExecuteStrategy(
 
       const graph = new StateGraph(PlanState)
         .addNode("planner", async (state) => {
-          const result = await dependencies.plan(state.input);
+          const result = await dependencies.plan(
+            state.input,
+            options.reflectionContext,
+          );
           const plan = result.steps.slice(0, MAX_STEPS);
           if (plan.length === 0 && hasOperationalIntent(state.input)) {
             throw new Error(
@@ -497,7 +539,12 @@ export function createPlanAndExecuteStrategy(
           if (!step) throw new Error("Plan executor received no pending step");
           let execution: ExecutionOutput;
           try {
-            execution = await dependencies.execute(step, state.done, state.input);
+            execution = await dependencies.execute(
+              step,
+              state.done,
+              state.input,
+              options.reflectionContext,
+            );
           } catch (error) {
             const completed = state.done
               .map(([completedStep, observation]) => {
@@ -533,7 +580,13 @@ export function createPlanAndExecuteStrategy(
                       content: execution.observation,
                     },
                   ]),
-              { type: "observation" as const, content: execution.observation },
+              {
+                type: "observation" as const,
+                content: execution.observation,
+                ...(execution.tool
+                  ? { tools: [execution.tool], args: execution.args ?? {} }
+                  : {}),
+              },
             ],
           };
         })

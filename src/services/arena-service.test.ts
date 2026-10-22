@@ -2,11 +2,23 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ReasoningStrategy } from "../agents/types.js";
 import { DomainError } from "../errors/domain-error.js";
-import { createArenaService } from "./arena-service.js";
+import { createArenaService, strategies } from "./arena-service.js";
+
+test("registers the base and reflected variants", () => {
+  assert.deepEqual(
+    strategies.map(({ name }) => name),
+    [
+      "react",
+      "plan-and-execute",
+      "reflect:react",
+      "reflect:plan-and-execute",
+    ],
+  );
+});
 
 test("runs selected strategies against the same input with the same limit", async () => {
   const received: Array<[string, number | undefined]> = [];
-  const strategy = (name: "react" | "plan-and-execute"): ReasoningStrategy => ({
+  const strategy = (name: string): ReasoningStrategy => ({
     name,
     async run(input, options) {
       received.push([input, options?.maxIterations]);
@@ -34,6 +46,65 @@ test("runs selected strategies against the same input with the same limit", asyn
     ["react", "plan-and-execute"],
   );
   assert.deepEqual(result.map(({ result: run }) => run.metrics.calls), [1, 1]);
+});
+
+test("passes reflection bounds to explicitly selected reflected strategies", async () => {
+  const received: Array<[string, number | undefined]> = [];
+  const makeStrategy = (name: string): ReasoningStrategy => ({
+    name,
+    async run(input, options) {
+      received.push([input, options?.maxReflection]);
+      return {
+        answer: name,
+        trace: [{ type: "answer", content: name }],
+        metrics: { calls: 2, latencyMs: 4 },
+      };
+    },
+  });
+  const service = createArenaService([
+    makeStrategy("react"),
+    makeStrategy("plan-and-execute"),
+    makeStrategy("reflect:react"),
+    makeStrategy("reflect:plan-and-execute"),
+  ]);
+
+  const results = await service.run("Investigate", {
+    strategyNames: ["reflect:react", "reflect:plan-and-execute"],
+    maxReflection: 0,
+  });
+
+  assert.deepEqual(received, [
+    ["Investigate", 0],
+    ["Investigate", 0],
+  ]);
+  assert.deepEqual(
+    results.map(({ strategy: name }) => name),
+    ["reflect:react", "reflect:plan-and-execute"],
+  );
+});
+
+test("omitted strategy names do not add reflected strategies to the default run", async () => {
+  const invoked: string[] = [];
+  const makeStrategy = (name: string): ReasoningStrategy => ({
+    name,
+    async run() {
+      invoked.push(name);
+      return {
+        answer: name,
+        trace: [],
+        metrics: { calls: 0, latencyMs: 0 },
+      };
+    },
+  });
+  const service = createArenaService([
+    makeStrategy("react"),
+    makeStrategy("plan-and-execute"),
+    makeStrategy("reflect:react"),
+    makeStrategy("reflect:plan-and-execute"),
+  ]);
+
+  await service.run("Investigate");
+  assert.deepEqual(invoked, ["react", "plan-and-execute"]);
 });
 
 test("rejects an empty selection and an unknown strategy without running one", async () => {

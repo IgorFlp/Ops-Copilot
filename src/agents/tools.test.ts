@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DomainError } from "../errors/domain-error.js";
-import { AlertRecord, IncidentRecord } from "./types.js";
-import { createOpsTools, normalizeToolArguments } from "./tools.js";
+import { AlertRecord, IncidentRecord, ReflectionAction } from "./types.js";
+import {
+  createOpsTools,
+  normalizeToolArguments,
+  priorMutationObservation,
+} from "./tools.js";
 
 test("tools expose expected names, defaults, and serialized service results", async () => {
   const calls: string[] = [];
@@ -139,4 +143,63 @@ test("tools reject malformed schemas before calling the service", async () => {
   );
   await assert.rejects(tools[2].invoke({ id: -1 }));
   assert.equal(called, false);
+});
+
+test("replays a completed state-changing action observation instead of mutating again", async () => {
+  let openCalls = 0;
+  let resolveCalls = 0;
+  const completedActions: ReflectionAction[] = [
+    {
+      tool: "open_incidente",
+      args: {
+        title: " Latency ",
+        service: " payments ",
+        severity: "SEV-2",
+      },
+      observation: '{"id":25,"status":"open"}',
+    },
+    {
+      tool: "resolve_incidente",
+      args: { incident_id: "25", id: 25 },
+      observation: '{"id":25,"status":"resolved"}',
+    },
+  ];
+  const tools = createOpsTools(
+    {
+      async listAlerts() {
+        return [];
+      },
+      async openIncident() {
+        openCalls += 1;
+        throw new Error("A completed incident must not be opened twice");
+      },
+      async resolveIncident() {
+        resolveCalls += 1;
+        throw new Error("A completed incident must not be resolved twice");
+      },
+    },
+    completedActions,
+  );
+
+  assert.equal(
+    await tools[1].invoke({
+      title: "Latency",
+      service: "payments",
+      severity: "high",
+    }),
+    '{"id":25,"status":"open"}',
+  );
+  assert.equal(
+    await tools[2].invoke({ id: 25 }),
+    '{"id":25,"status":"resolved"}',
+  );
+  assert.equal(
+    priorMutationObservation(completedActions, "open_incidente", {
+      severity: "high",
+      service: " payments ",
+      title: " Latency ",
+    }),
+    '{"id":25,"status":"open"}',
+  );
+  assert.deepEqual([openCalls, resolveCalls], [0, 0]);
 });

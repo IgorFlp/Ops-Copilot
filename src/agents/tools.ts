@@ -4,6 +4,7 @@ import {
   createIncidentService,
   IncidentServiceStore,
 } from "../services/incident-service.js";
+import { ReflectionAction } from "./types.js";
 
 const alertStatusSchema = z.enum(["firing", "resolved", "all"]).default("firing");
 const severityValues = ["critical", "high", "medium", "low"] as const;
@@ -47,7 +48,66 @@ const resolveIncidentInputSchema = z.object({
   id: z.number().int().positive(),
 });
 
-export function createOpsTools(store?: IncidentServiceStore) {
+function stableValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableValue).join(",")}]`;
+  }
+  if (typeof value === "object" && value !== null) {
+    return `{${Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableValue(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? String(value);
+}
+
+function canonicalActionArgs(
+  name: "open_incidente" | "resolve_incidente",
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  if (name === "resolve_incidente") {
+    const normalized = normalizeToolArguments(name, args);
+    const id = normalized.id;
+    if (typeof id === "string" && /^\d+$/.test(id.trim())) {
+      return { id: Number(id.trim()) };
+    }
+    return id === undefined ? normalized : { id };
+  }
+
+  const severity =
+    typeof args.severity === "string"
+      ? args.severity.trim().toLowerCase().replace(/^sev[-\s]?([1-4])$/, (_match, level: string) =>
+          ["critical", "high", "medium", "low"][Number(level) - 1],
+        )
+      : args.severity;
+  return {
+    ...args,
+    ...(typeof args.title === "string" ? { title: args.title.trim() } : {}),
+    ...(typeof args.service === "string"
+      ? { service: args.service.trim() }
+      : {}),
+    ...(severity === undefined ? {} : { severity }),
+  };
+}
+
+export function priorMutationObservation(
+  completedActions: ReflectionAction[],
+  name: "open_incidente" | "resolve_incidente",
+  args: Record<string, unknown>,
+): string | undefined {
+  const normalizedArgs = canonicalActionArgs(name, args);
+  return completedActions.find(
+    (action) =>
+      action.tool === name &&
+      stableValue(canonicalActionArgs(name, action.args)) ===
+        stableValue(normalizedArgs),
+  )?.observation;
+}
+
+export function createOpsTools(
+  store?: IncidentServiceStore,
+  completedActions: ReflectionAction[] = [],
+) {
   const service = store
     ? createIncidentService(store)
     : createIncidentService();
@@ -63,14 +123,22 @@ export function createOpsTools(store?: IncidentServiceStore) {
   );
 
   const openIncident = tool(
-    async ({ title, service: serviceSlug, severity }) =>
-      JSON.stringify(
+    async ({ title, service: serviceSlug, severity }) => {
+      const args = { title, service: serviceSlug, severity };
+      const previous = priorMutationObservation(
+        completedActions,
+        "open_incidente",
+        args,
+      );
+      if (previous !== undefined) return previous;
+      return JSON.stringify(
         await service.openIncident({
           title,
           service: serviceSlug,
           severity,
         }),
-      ),
+      );
+    },
     {
       name: "open_incidente",
       description:
@@ -80,7 +148,16 @@ export function createOpsTools(store?: IncidentServiceStore) {
   );
 
   const resolveIncident = tool(
-    async ({ id }) => JSON.stringify(await service.resolveIncident(id)),
+    async ({ id }) => {
+      const args = { id };
+      const previous = priorMutationObservation(
+        completedActions,
+        "resolve_incidente",
+        args,
+      );
+      if (previous !== undefined) return previous;
+      return JSON.stringify(await service.resolveIncident(id));
+    },
     {
       name: "resolve_incidente",
       description: "Resolve an existing open incident by its numeric identifier.",

@@ -1,6 +1,7 @@
 import { DomainError } from "../errors/domain-error.js";
 import { planAndExecuteStrategy } from "../agents/plan-and-execute.js";
 import { reactStrategy } from "../agents/react.js";
+import { withReflection } from "../agents/reflection.js";
 import {
   ReasoningResult,
   ReasoningStrategy,
@@ -10,6 +11,8 @@ import {
 export const strategies: ReasoningStrategy[] = [
   reactStrategy,
   planAndExecuteStrategy,
+  withReflection(reactStrategy),
+  withReflection(planAndExecuteStrategy),
 ];
 
 export interface ArenaRunOptions extends StrategyRunOptions {
@@ -33,7 +36,10 @@ export function createArenaService(
         throw new DomainError("Input is required", "VALIDATION");
       }
       const selectedNames =
-        options.strategyNames ?? availableStrategies.map(({ name }) => name);
+        options.strategyNames ??
+        availableStrategies
+          .filter(({ name }) => !name.startsWith("reflect:"))
+          .map(({ name }) => name);
       if (selectedNames.length === 0) {
         throw new DomainError(
           "Select at least one strategy",
@@ -54,6 +60,7 @@ export function createArenaService(
           strategy: strategy.name,
           result: await strategy.run(input, {
             maxIterations: options.maxIterations,
+            maxReflection: options.maxReflection,
           }),
         })),
       );

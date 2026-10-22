@@ -14,7 +14,7 @@ test("formats all supported event types deterministically and in order", () => {
       args: { status: "firing" },
     },
     { type: "observation", content: "One alert is firing" },
-    { type: "critique", content: "The alert is relevant" },
+    { type: "critique", content: "The alert is relevant", approved: true },
     { type: "answer", content: "One alert is firing." },
   ];
 
@@ -23,7 +23,7 @@ test("formats all supported event types deterministically and in order", () => {
     "02 plan: Review firing alerts",
     '03 action: Calling alert tool tools=["list_alerts"] args={"status":"firing"}',
     "04 observation: One alert is firing",
-    "05 critique: The alert is relevant",
+    "05 critique: The alert is relevant approved=true",
     "06 answer: One alert is firing.",
   ].join("\n");
   assert.equal(formatTrace(events), expected);

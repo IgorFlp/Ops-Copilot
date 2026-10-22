@@ -15,6 +15,7 @@ export interface TraceEvent {
   timestamp?: string;
   tools?: string[];
   args?: Record<string, unknown>;
+  approved?: boolean;
 }
 
 export interface ReasoningMetrics {
@@ -30,10 +31,24 @@ export interface ReasoningResult {
 
 export interface StrategyRunOptions {
   maxIterations?: number;
+  maxReflection?: number;
+  reflectionContext?: ReflectionContext;
+}
+
+export interface ReflectionAction {
+  tool: string;
+  args: Record<string, unknown>;
+  observation: string;
+}
+
+export interface ReflectionContext {
+  feedback: string[];
+  observations: string[];
+  completedActions: ReflectionAction[];
 }
 
 export interface ReasoningStrategy {
-  name: "react" | "plan-and-execute";
+  name: string;
   run(input: string, options?: StrategyRunOptions): Promise<ReasoningResult>;
 }
 

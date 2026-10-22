@@ -9,6 +9,7 @@ import {
   PlanStep,
 } from "./plan-and-execute.js";
 import { normalizeToolArguments } from "./tools.js";
+import { ReflectionContext } from "./types.js";
 
 function step(number: number): PlanStep {
   return `Read alert batch ${number}`;
@@ -453,6 +454,7 @@ test("passes completed incident observations to resolution steps and normalizes 
       const args = normalizeToolArguments("resolve_incidente", {
         incident_id: 42,
       });
+
       return {
         tool: "resolve_incidente",
         args,
@@ -477,4 +479,45 @@ test("passes completed incident observations to resolution steps and normalizes 
   );
   assert.deepEqual(resolutionAction?.args, { incident_id: 42, id: 42 });
   assert.equal(result.answer, "Incident opened and resolved.");
+});
+
+test("passes reflection context to planning and execution on retries", async () => {
+  const context: ReflectionContext = {
+    feedback: ["Use the incident id from prior work."],
+    observations: ['{"id":42,"status":"open"}'],
+    completedActions: [
+      {
+        tool: "open_incidente",
+        args: { title: "Latency", service: "checkout", severity: "high" },
+        observation: '{"id":42,"status":"open"}',
+      },
+    ],
+  };
+  let receivedPlanContext: ReflectionContext | undefined;
+  let receivedExecuteContext: ReflectionContext | undefined;
+  const strategy = createPlanAndExecuteStrategy({
+    async plan(_input, reflectionContext) {
+      receivedPlanContext = reflectionContext;
+      return { steps: ["Summarize the completed incident"], answer: "" };
+    },
+    async execute(_step, _done, _input, reflectionContext) {
+      receivedExecuteContext = reflectionContext;
+      return { observation: "Incident 42 is open." };
+    },
+    async replan() {
+      return {
+        decision: "finish",
+        remainingSteps: [],
+        critique: "The completed incident was summarized.",
+        answer: "Incident 42 is open.",
+      };
+    },
+  });
+
+  await strategy.run("Summarize the incident", {
+    reflectionContext: context,
+  });
+
+  assert.deepEqual(receivedPlanContext, context);
+  assert.deepEqual(receivedExecuteContext, context);
 });

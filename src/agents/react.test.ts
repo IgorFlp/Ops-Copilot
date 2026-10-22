@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { AIMessage, ToolMessage } from "@langchain/core/messages";
 import { DomainError } from "../errors/domain-error.js";
+import { ReflectionContext } from "./types.js";
 import { createReactStrategy } from "./react.js";
 
 test("ReAct captures actions, observations, answer, and model-call count", async () => {
@@ -48,6 +49,31 @@ test("ReAct reports tool/model failures and validates iteration bounds", async (
   const failure = new Error("provider unavailable");
   const strategy = createReactStrategy(async () => {
     throw failure;
+  });
+
+  test("ReAct passes reflection feedback and prior observations into its retry", async () => {
+    const context: ReflectionContext = {
+      feedback: ["Include the incident identifier."],
+      observations: ['{"id":41,"status":"open"}'],
+      completedActions: [
+        {
+          tool: "open_incidente",
+          args: { title: "Latency", service: "checkout", severity: "high" },
+          observation: '{"id":41,"status":"open"}',
+        },
+      ],
+    };
+    let receivedContext: ReflectionContext | undefined;
+    const strategy = createReactStrategy(async (_input, _maxIterations, retry) => {
+      receivedContext = retry;
+      return { messages: [new AIMessage({ content: "Incident 41 is open." })] };
+    });
+
+    await strategy.run("Open a latency incident", {
+      reflectionContext: context,
+    });
+
+    assert.deepEqual(receivedContext, context);
   });
   await assert.rejects(strategy.run("Check alerts"), failure);
   await assert.rejects(

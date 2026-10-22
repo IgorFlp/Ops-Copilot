@@ -16,13 +16,27 @@ test("validates the arena request and applies bounded optional fields", () => {
   assert.deepEqual(
     parseArenaRequest({
       input: "Check alerts",
-      strategies: ["react"],
+      strategies: ["reflect:react"],
       maxIterations: 4,
+      maxReflection: 0,
     }),
     {
       input: "Check alerts",
-      strategies: ["react"],
+      strategies: ["reflect:react"],
       maxIterations: 4,
+      maxReflection: 0,
+    },
+  );
+  assert.deepEqual(
+    parseArenaRequest({
+      input: "Check alerts",
+      strategies: ["reflect:plan-and-execute"],
+      maxReflection: 100,
+    }),
+    {
+      input: "Check alerts",
+      strategies: ["reflect:plan-and-execute"],
+      maxReflection: 100,
     },
   );
 });
@@ -35,6 +49,10 @@ test("rejects malformed arena request values", () => {
     { input: "Check", strategies: ["unknown"] },
     { input: "Check", maxIterations: 0 },
     { input: "Check", maxIterations: 101 },
+    { input: "Check", maxReflection: -1 },
+    { input: "Check", maxReflection: 1.5 },
+    { input: "Check", maxReflection: 101 },
+    { input: "Check", strategies: ["reflect:react", "reflect:react"] },
   ]) {
     assert.throws(() => parseArenaRequest(body));
   }

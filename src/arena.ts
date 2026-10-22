@@ -13,6 +13,7 @@ async function main(): Promise<void> {
     const results = await arenaService.run(options.input, {
       strategyNames: options.strategies,
       maxIterations: options.maxIterations,
+      maxReflection: options.maxReflection,
     });
     process.stdout.write(`${formatArenaResults(results)}\n`);
   } finally {

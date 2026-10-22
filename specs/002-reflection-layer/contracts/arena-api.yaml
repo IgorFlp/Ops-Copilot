@@ -1,0 +1,157 @@
+openapi: 3.1.0
+info:
+  title: OpsPilot Reasoning Arena
+  version: 1.1.0
+paths:
+  /arena:
+    post:
+      summary: Run selected operational reasoning strategies
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArenaRequest"
+            examples:
+              reflectedReact:
+                summary: Run ReAct with reflection
+                value:
+                  input: "What alerts are firing?"
+                  strategies:
+                    - reflect:react
+                  maxReflection: 2
+              reflectedPlanning:
+                summary: Run plan-and-execute with reflection
+                value:
+                  input: "Investigate firing alerts and recommend next steps."
+                  strategies:
+                    - reflect:plan-and-execute
+      responses:
+        "200":
+          description: A separate answer, trace, and metrics result for each selected strategy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArenaResponse"
+        "400":
+          description: Request schema, strategy selection, or iteration/reflection limit is invalid.
+        "500":
+          description: Model, database, critic, or operational execution failed.
+components:
+  schemas:
+    ArenaRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - input
+      properties:
+        input:
+          type: string
+          minLength: 1
+          maxLength: 20000
+        strategies:
+          type: array
+          minItems: 1
+          maxItems: 4
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+              - react
+              - plan-and-execute
+              - reflect:react
+              - reflect:plan-and-execute
+          description: >
+            Omit to run the two unreflected strategies, preserving existing
+            arena behavior. Select reflected variants explicitly.
+        maxIterations:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 8
+        maxReflection:
+          type: integer
+          minimum: 0
+          maximum: 100
+          default: 2
+          description: Maximum answer regenerations for selected reflected strategies.
+    ArenaResponse:
+      type: object
+      required:
+        - input
+        - results
+      properties:
+        input:
+          type: string
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/StrategyResult"
+    StrategyResult:
+      type: object
+      required:
+        - strategy
+        - result
+      properties:
+        strategy:
+          type: string
+          enum:
+            - react
+            - plan-and-execute
+            - reflect:react
+            - reflect:plan-and-execute
+        result:
+          $ref: "#/components/schemas/ReasoningResult"
+    ReasoningResult:
+      type: object
+      required:
+        - answer
+        - trace
+        - metrics
+      properties:
+        answer:
+          type: string
+        trace:
+          type: array
+          items:
+            $ref: "#/components/schemas/TraceEvent"
+        metrics:
+          type: object
+          required:
+            - calls
+            - latencyMs
+          properties:
+            calls:
+              type: integer
+              minimum: 0
+            latencyMs:
+              type: number
+              minimum: 0
+    TraceEvent:
+      type: object
+      required:
+        - type
+        - content
+      properties:
+        type:
+          type: string
+          enum:
+            - thought
+            - action
+            - observation
+            - plan
+            - critique
+            - answer
+        content:
+          type: string
+          description: Critic feedback for reflection events.
+        approved:
+          type: boolean
+          description: Present on a reflection-generated critique event.
+        tools:
+          type: array
+          items:
+            type: string
+        args:
+          type: object
+          additionalProperties: true

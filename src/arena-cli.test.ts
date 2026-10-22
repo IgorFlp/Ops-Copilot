@@ -5,7 +5,7 @@ import {
   parseArenaCliArguments,
 } from "./arena-cli.js";
 
-test("parses input, one strategy, and iteration limit", () => {
+test("parses input, one strategy, and iteration and reflection limits", () => {
   assert.deepEqual(
     parseArenaCliArguments([
       "What alerts are firing?",
@@ -13,11 +13,14 @@ test("parses input, one strategy, and iteration limit", () => {
       "react",
       "--max-iterations",
       "3",
+      "--max-reflection",
+      "2",
     ]),
     {
       input: "What alerts are firing?",
       strategies: ["react"],
       maxIterations: 3,
+      maxReflection: 2,
     },
   );
 });
@@ -38,6 +41,23 @@ test("recovers npm-parsed flags from lifecycle config and trailing values", () =
       input: "Investigate alerts",
       strategies: ["plan-and-execute"],
       maxIterations: 4,
+    },
+  );
+});
+
+test("accepts reflected strategies and a zero reflection bound", () => {
+  assert.deepEqual(
+    parseArenaCliArguments([
+      "Investigate alerts",
+      "--strategies",
+      "reflect:react,reflect:plan-and-execute",
+      "--max-reflection",
+      "0",
+    ]),
+    {
+      input: "Investigate alerts",
+      strategies: ["reflect:react", "reflect:plan-and-execute"],
+      maxReflection: 0,
     },
   );
 });
@@ -63,6 +83,18 @@ test("accepts comma-separated strategies and rejects invalid CLI arguments", () 
   assert.throws(
     () => parseArenaCliArguments(["Inspect", "--max-iterations", "0"]),
     /integer from 1 to 100/,
+  );
+  assert.throws(
+    () => parseArenaCliArguments(["Inspect", "--max-reflection", "-1"]),
+    /integer from 0 to 100/,
+  );
+  assert.throws(
+    () => parseArenaCliArguments(["Inspect", "--max-reflection", "1.5"]),
+    /integer from 0 to 100/,
+  );
+  assert.throws(
+    () => parseArenaCliArguments(["Inspect", "--max-reflection", "101"]),
+    /integer from 0 to 100/,
   );
   assert.throws(
     () => parseArenaCliArguments(["Inspect", "--unrecognized"]),
