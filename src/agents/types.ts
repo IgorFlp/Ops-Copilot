@@ -1,4 +1,4 @@
-import type { AlertStatus } from "../models/alert.js";
+import type { AlertSeverity, AlertStatus } from "../models/alert.js";
 import type { IncidentSeverity, IncidentStatus } from "../models/incident.js";
 
 export type TraceEventType =
@@ -33,6 +33,7 @@ export interface StrategyRunOptions {
   maxIterations?: number;
   maxReflection?: number;
   reflectionContext?: ReflectionContext;
+  noReplanner?: boolean;
 }
 
 export interface ReflectionAction {
@@ -60,6 +61,7 @@ export interface AlertRecord {
   title: string;
   description: string;
   status: AlertStatus;
+  severity: AlertSeverity;
 }
 
 export interface IncidentRecord {

@@ -21,6 +21,7 @@ test("tools expose expected names, defaults, and serialized service results", as
         title: "Latency",
         description: "Latency high",
         status: "firing",
+        severity: "critical",
       };
       return [alert];
     },

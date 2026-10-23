@@ -1,9 +1,10 @@
-import type { AlertStatus } from "../src/models/alert.js";
-import { ensureDatabaseReady, sequelize } from "../src/models/database.js";
+import type { AlertSeverity, AlertStatus } from "../src/models/alert.js";
+import { sequelize } from "../src/models/database.js";
 import { Service } from "../src/models/service.js";
 import { Alert } from "../src/models/alert.js";
 import { ensureServiceFixtures } from "../src/services/service-fixtures.js";
 import type { ServiceFixture } from "../src/services/service-fixtures.js";
+import { migrateAlertSeverity } from "./migrate-alert-severity.js";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -13,6 +14,7 @@ interface AlertSeed {
   title: string;
   description: string;
   status: AlertStatus;
+  severity: AlertSeverity;
 }
 
 const alertFixtures: AlertSeed[] = [
@@ -22,6 +24,7 @@ const alertFixtures: AlertSeed[] = [
     title: "Payment processing latency elevated",
     description: "The 95th percentile payment latency is above threshold.",
     status: "firing",
+    severity: "critical",
   },
   {
     fixtureKey: "opspilot-seed-checkout-errors",
@@ -29,6 +32,7 @@ const alertFixtures: AlertSeed[] = [
     title: "Checkout error rate elevated",
     description: "Checkout failures exceeded the recent baseline.",
     status: "firing",
+    severity: "critical",
   },
   {
     fixtureKey: "opspilot-seed-orders-queue",
@@ -36,6 +40,7 @@ const alertFixtures: AlertSeed[] = [
     title: "Order queue backlog growing",
     description: "The order processing queue is above its target depth.",
     status: "firing",
+    severity: "high",
   },
   {
     fixtureKey: "opspilot-seed-inventory-recovered",
@@ -43,6 +48,7 @@ const alertFixtures: AlertSeed[] = [
     title: "Inventory synchronization recovered",
     description: "Inventory synchronization returned to normal.",
     status: "resolved",
+    severity: "medium",
   },
   {
     fixtureKey: "opspilot-seed-notifications-recovered",
@@ -50,6 +56,7 @@ const alertFixtures: AlertSeed[] = [
     title: "Catalog synchronization recovered",
     description: "Catalog synchronization returned to normal.",
     status: "resolved",
+    severity: "medium",
   },
   {
     fixtureKey: "opspilot-seed-payments-recovered",
@@ -57,6 +64,7 @@ const alertFixtures: AlertSeed[] = [
     title: "Payment gateway connection recovered",
     description: "The payment gateway connection is healthy again.",
     status: "resolved",
+    severity: "medium",
   },
 ];
 
@@ -65,6 +73,13 @@ export interface SeedStore {
   upsertAlert(
     alert: AlertSeed & { serviceId: number },
   ): Promise<void>;
+}
+
+export function alertPersistenceValues(
+  fixture: AlertSeed & { serviceId: number },
+): Omit<AlertSeed, "service"> & { serviceId: number } {
+  const { service: _service, ...values } = fixture;
+  return values;
 }
 
 export async function seedOperationalData(store: SeedStore): Promise<void> {
@@ -79,8 +94,8 @@ export async function seedOperationalData(store: SeedStore): Promise<void> {
   }
 }
 
-async function runSeed(): Promise<void> {
-  await ensureDatabaseReady();
+export async function seedOperationalDatabase(): Promise<void> {
+  await migrateAlertSeverity();
   await sequelize.transaction(async (transaction) => {
     await seedOperationalData({
       async upsertService(fixture) {
@@ -93,18 +108,23 @@ async function runSeed(): Promise<void> {
         return { id: service.id };
       },
       async upsertAlert(fixture) {
-        const { serviceId, ...values } = fixture;
+        const values = alertPersistenceValues(fixture);
+        const { serviceId, ...alertValues } = values;
         const [alert, created] = await Alert.findOrCreate({
           where: { fixtureKey: fixture.fixtureKey },
-          defaults: { ...values, serviceId },
+          defaults: values,
           transaction,
         });
         if (!created) {
-          await alert.update({ ...values, serviceId }, { transaction });
+          await alert.update({ ...alertValues, serviceId }, { transaction });
         }
       },
     });
   });
+}
+
+async function runSeed(): Promise<void> {
+  await seedOperationalDatabase();
   console.info("Seeded 5 services and 6 alerts (3 firing, 3 resolved).");
 }
 

@@ -34,6 +34,7 @@ function createMemoryStore(): IncidentServiceStore {
       title: "High latency",
       description: "Latency is above threshold",
       status: "firing",
+      severity: "critical",
     },
     {
       id: 2,
@@ -43,6 +44,7 @@ function createMemoryStore(): IncidentServiceStore {
       title: "Recovered",
       description: "Latency returned to normal",
       status: "resolved",
+      severity: "medium",
     },
   ];
   const incidents: IncidentRecord[] = [];

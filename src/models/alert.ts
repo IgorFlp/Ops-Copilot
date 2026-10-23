@@ -11,6 +11,7 @@ import { sequelize } from "./database.js";
 import { Service } from "./service.js";
 
 export type AlertStatus = "firing" | "resolved";
+export type AlertSeverity = "critical" | "high" | "medium" | "low";
 
 export class Alert extends Model<
   InferAttributes<Alert>,
@@ -22,6 +23,7 @@ export class Alert extends Model<
   declare title: string;
   declare description: string;
   declare status: AlertStatus;
+  declare severity: AlertSeverity;
   declare service?: NonAttribute<Service>;
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
@@ -39,6 +41,11 @@ Alert.init(
     title: { type: DataTypes.STRING(200), allowNull: false },
     description: { type: DataTypes.TEXT, allowNull: false },
     status: { type: DataTypes.ENUM("firing", "resolved"), allowNull: false },
+    severity: {
+      type: DataTypes.ENUM("critical", "high", "medium", "low"),
+      allowNull: false,
+      defaultValue: "medium",
+    },
     createdAt: DataTypes.DATE,
     updatedAt: DataTypes.DATE,
   },

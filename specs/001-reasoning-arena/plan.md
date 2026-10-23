@@ -6,7 +6,7 @@
 
 ## Summary
 
-Implement a shared reasoning result and trace contract, a single deterministic OpenRouter model factory, and persistent incident/alert tools over the project's PostgreSQL datastore. Add bounded ReAct and plan-and-execute strategies and expose their comparison through both an HTTP endpoint and a developer CLI integrated with the existing Express application. Provide repeatable sample data and deterministic offline tests.
+Implement a shared reasoning result and trace contract, a single deterministic OpenRouter model factory, and persistent incident/alert tools over the project's PostgreSQL datastore. Add bounded ReAct and plan-and-execute strategies and expose their comparison through both an HTTP endpoint and a developer CLI integrated with the existing Express application. Provide repeatable sample data, alert severity, an accuracy-checked benchmark for three operational scenarios, and deterministic offline tests.
 
 ## Technical Context
 
@@ -14,7 +14,7 @@ Implement a shared reasoning result and trace contract, a single deterministic O
 
 **Primary Dependencies**: Express, Zod, Sequelize, PostgreSQL (`pg`), LangChain/LangGraph, `@langchain/openai`; existing `tsx` and `node:test` workflow
 
-**Storage**: PostgreSQL, accessed through Sequelize; services, alerts, and incidents are persistent operational records
+**Storage**: PostgreSQL, accessed through Sequelize; services, alerts (including severity), and incidents are persistent operational records
 
 **Testing**: `npm run typecheck`; `npm test` using `node:test` via `tsx`; store and trace-format tests use deterministic fixtures and no provider network
 
@@ -22,11 +22,11 @@ Implement a shared reasoning result and trace contract, a single deterministic O
 
 **Project Type**: HTTP web service with an HTTP reasoning arena endpoint and a developer CLI for local strategy tests
 
-**Performance Goals**: No provider-independent latency SLA is specified. Measure elapsed strategy latency and enforce configured iteration and eight-step plan bounds.
+**Performance Goals**: No provider-independent latency SLA is specified. Measure elapsed strategy latency and LLM-call counts; enforce configured iteration and eight-step plan bounds. Benchmark accuracy is checked against persisted state.
 
-**Constraints**: Keep the existing strict ESM/TypeScript and MVC boundaries. Validate HTTP inputs with Zod, isolate database IO in models/services, surface failures explicitly, do not add `dotenv`, and do not expose private chain-of-thought. The plan-and-execute strategy considers at most eight steps. The sample seed must be repeatable and must not remove unrelated records.
+**Constraints**: Keep the existing strict ESM/TypeScript and MVC boundaries. Validate HTTP inputs with Zod, isolate database IO in models/services, surface failures explicitly, do not add `dotenv`, and do not expose private chain-of-thought. The plan-and-execute strategy considers at most eight steps and can optionally skip replanning for benchmark runs. Alert severity is added through a versioned SQL migration. The sample seed must be repeatable and must not remove unrelated records; benchmark cleanup removes only its own incidents.
 
-**Scale/Scope**: One minimal arena endpoint; two strategies; three operational tools; five seeded services, six seeded alerts, and the incident records created by tool use.
+**Scale/Scope**: One minimal arena endpoint; one developer arena CLI; a three-scenario/two-strategy benchmark CLI; three operational tools; five seeded services, six seeded alerts, and the incident records created by tool use.
 
 ## Constitution Check
 
@@ -89,13 +89,16 @@ src/
     └── trace-format.ts                # Deterministic trace serialization/formatting
 
 scripts/
-└── seed.ts                            # Idempotent fixture seed entry point
+├── seed.ts                            # Idempotent fixture seed entry point
+└── migrations/
+    └── 001-alert-severity.sql         # Versioned alert severity migration
 
 src/
-└── *.test.ts                          # node:test unit tests for store/tools/trace
+├── bench.ts                           # Accuracy-checked strategy benchmark CLI
+└── *.test.ts                          # node:test unit tests for store/tools/trace/benchmark
 ```
 
-**Structure Decision**: Use the existing single TypeScript service and its Express, Sequelize, LangGraph, and test dependencies. Keep the HTTP API and add a separate developer CLI entry point that shares the same arena service, initializes the database explicitly, validates its arguments, and prints JSON results. Add deterministic argument/output tests and retain the explicit seed script entry point.
+**Structure Decision**: Use the existing single TypeScript service and its Express, Sequelize, LangGraph, and test dependencies. Keep the HTTP API and developer arena CLI. Add a separate benchmark entry point that runs existing strategies against the operational store, checks scenario-specific state, prints a consolidated table, and cleans only its uniquely tagged incident records. Apply alert schema changes through a versioned SQL migration and preserve deterministic offline tests.
 
 ## Complexity Tracking
 

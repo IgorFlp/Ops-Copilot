@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createPlanAndExecuteStrategy,
+  createFallbackPlan,
+  inferExecutorSelectionFromStep,
   isMutationAuthorized,
   parseExecutorSelection,
   parsePlannerOutput,
@@ -63,6 +65,105 @@ test("does not authorize incident mutations for analysis and plan requests", () 
   );
 });
 
+test("creates conservative fallback plans for the benchmark scenarios", () => {
+  assert.deepEqual(
+    createFallbackPlan(
+      "Quantos alertas criticos estão disparando? Não abra nem resolva incidentes.",
+    )?.steps,
+    ["List firing alerts", "Count critical firing alerts and answer the user"],
+  );
+  assert.deepEqual(
+    createFallbackPlan(
+      "Abra três incidentes sev2 para checkout, payment e catalog, nessa mesma ordem e resolva o primeiro. " +
+        "Use exatamente estes títulos, na mesma ordem: run-C2-checkout; run-C2-payment; run-C2-catalog.",
+    )?.steps,
+    [
+      "Open incident: service=checkout, title=run-C2-checkout, severity=sev2",
+      "Open incident: service=payments, title=run-C2-payment, severity=sev2",
+      "Open incident: service=catalog, title=run-C2-catalog, severity=sev2",
+      "Resolve incident: title=run-C2-checkout",
+    ],
+  );
+  assert.deepEqual(
+    createFallbackPlan(
+      "Dos alertas disparando, abra um incidente para o mais antigo e diga quantos sobraram. " +
+        "Use exatamente este título: run-C3-oldest. Diga quantos outros alertas disparando sobraram, sem alterar o status do alerta.",
+    )?.steps,
+    [
+      "List firing alerts",
+      "Open incident for oldest firing alert: title=run-C3-oldest",
+      "Count other firing alerts and answer the user",
+    ],
+  );
+});
+
+test("infers validated executor selections from explicit plan steps and observations", () => {
+  const openingObservation = JSON.stringify({
+    id: 42,
+    title: "run-C2-checkout",
+    status: "open",
+  });
+  assert.deepEqual(
+    inferExecutorSelectionFromStep(
+      "Resolve incident: title=run-C2-checkout",
+      [["Open incident", openingObservation]],
+    ),
+    {
+      kind: "tool",
+      tool: "resolve_incidente",
+      args: { id: 42 },
+    },
+  );
+
+  const alerts = JSON.stringify([
+    {
+      id: 5,
+      service: "Payments API",
+      status: "firing",
+      severity: "critical",
+    },
+    {
+      id: 8,
+      service: "Checkout API",
+      status: "firing",
+      severity: "critical",
+    },
+  ]);
+  assert.deepEqual(
+    inferExecutorSelectionFromStep("List firing alerts", []),
+    {
+      kind: "tool",
+      tool: "list_alerts",
+      args: { status: "firing" },
+    },
+  );
+  assert.deepEqual(
+    inferExecutorSelectionFromStep(
+      "Count critical firing alerts and answer the user",
+      [["List firing alerts", alerts]],
+    ),
+    {
+      kind: "reasoning",
+      observation: "2 critical alerts are firing.",
+    },
+  );
+  assert.deepEqual(
+    inferExecutorSelectionFromStep(
+      "Open incident for oldest firing alert: title=run-C3-oldest",
+      [["List firing alerts", alerts]],
+    ),
+    {
+      kind: "tool",
+      tool: "open_incidente",
+      args: {
+        title: "run-C3-oldest",
+        service: "Payments API",
+        severity: "critical",
+      },
+    },
+  );
+});
+
 test("validates executor selections and reports missing model output explicitly", () => {
   assert.deepEqual(
     parseExecutorSelection({
@@ -84,6 +185,31 @@ test("validates executor selections and reports missing model output explicitly"
       kind: "tool",
       tool: "list_alerts",
       args: { status: "firing" },
+    },
+  );
+  assert.deepEqual(
+    parseExecutorSelection({
+      raw: {
+        content: JSON.stringify({
+          tool: "resolve_incidente",
+          args: { incidentId: 42 },
+        }),
+      },
+      parsed: null,
+    }),
+    {
+      kind: "tool",
+      tool: "resolve_incidente",
+      args: { incidentId: 42 },
+    },
+  );
+  assert.deepEqual(
+    parseExecutorSelection({
+      observation: "The requested incident is now resolved.",
+    }),
+    {
+      kind: "reasoning",
+      observation: "The requested incident is now resolved.",
     },
   );
   assert.deepEqual(
@@ -171,6 +297,21 @@ test("parses structured outputs from provider raw responses and rejects missing 
     () => parseReplannerOutput(undefined),
     /Replanner model output failed: Model returned no structured output/,
   );
+  assert.throws(
+    () =>
+      parsePlannerOutput({
+        raw: {
+          tool_calls: [
+            {
+              name: "list_alerts",
+              args: { status: "firing" },
+            },
+          ],
+        },
+        parsed: null,
+      }),
+    /Planner model output failed: Model returned invalid structured output:[\s\S]*provider response: tool call\(s\) list_alerts/,
+  );
 });
 
 test("plan strategy executes one tool step then replans through finish", async () => {
@@ -180,12 +321,12 @@ test("plan strategy executes one tool step then replans through finish", async (
   let replanCalls = 0;
   const strategy = createPlanAndExecuteStrategy({
     async plan() {
-      return { steps: [step(1), step(2)], answer: "" };
+      return { steps: [step(1), step(2)], answer: "", calls: 2 };
     },
     async execute(planStep, _done, input) {
       executed.push(planStep);
       executorInputs.push(input);
-      return execution(planStep);
+      return { ...execution(planStep), calls: 3 };
     },
     async replan(_input, done, remainingSteps) {
       completedBatches.push(done);
@@ -196,6 +337,7 @@ test("plan strategy executes one tool step then replans through finish", async (
           remainingSteps: [step(2)],
           critique: "The first alert batch was reviewed.",
           answer: "",
+          calls: 4,
         };
       }
       assert.deepEqual(remainingSteps, []);
@@ -204,6 +346,7 @@ test("plan strategy executes one tool step then replans through finish", async (
         remainingSteps: [],
         critique: "The investigation is complete.",
         answer: "Investigation completed.",
+        calls: 4,
       };
     },
   });
@@ -217,7 +360,7 @@ test("plan strategy executes one tool step then replans through finish", async (
     [step(2), execution(step(2)).observation],
   ]);
   assert.equal(result.answer, "Investigation completed.");
-  assert.equal(result.metrics.calls, 5);
+  assert.equal(result.metrics.calls, 16);
   assert.equal(result.metrics.latencyMs >= 0, true);
   assert.deepEqual(
     result.trace.filter(({ type }) => type === "action").map(({ content }) => content),
@@ -225,6 +368,33 @@ test("plan strategy executes one tool step then replans through finish", async (
   );
   assert.ok(result.trace.some(({ type, content }) => type === "critique" && content.startsWith("adjust:")));
   assert.ok(result.trace.some(({ type, content }) => type === "critique" && content.startsWith("finish:")));
+});
+
+test("noReplanner executes the initial plan without invoking the replanner", async () => {
+  const executed: string[] = [];
+  let replanCalls = 0;
+  const strategy = createPlanAndExecuteStrategy({
+    async plan() {
+      return { steps: [step(1), step(2)], answer: "" };
+    },
+    async execute(planStep) {
+      executed.push(planStep);
+      return execution(planStep);
+    },
+    async replan() {
+      replanCalls += 1;
+      throw new Error("Replanner must be skipped");
+    },
+  });
+
+  const result = await strategy.run("Investigate alerts", {
+    noReplanner: true,
+  });
+
+  assert.deepEqual(executed, [step(1), step(2)]);
+  assert.equal(replanCalls, 0);
+  assert.equal(result.metrics.calls, 3);
+  assert.equal(result.trace.some(({ type }) => type === "critique"), false);
 });
 
 test("records an analytical plan step without invoking a tool", async () => {

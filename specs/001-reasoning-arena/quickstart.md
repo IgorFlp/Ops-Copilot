@@ -13,6 +13,7 @@ Copy `.env.example` to `.env` and set the PostgreSQL and OpenRouter values local
 ## Seed sample operational data
 
 ```powershell
+npm run db:migrate:alert-severity
 npm run seed
 ```
 
@@ -24,6 +25,7 @@ Seeded 5 services and 6 alerts (3 firing, 3 resolved).
 
 The seed uses fixture keys and upserts records; running it again must keep the fixture counts unchanged and preserve unrelated services and alerts.
 The five seeded services are Payments API, Checkout API, Orders API, Inventory API, and Catalog API. The arena CLI idempotently ensures these service fixtures exist before running a strategy; it does not reseed or reset alert statuses.
+The migration adds alert severity and backfills existing records; seeded Payments and Checkout firing alerts are critical, the Orders firing alert is high, and resolved fixtures are medium.
 
 ## Run deterministic checks
 
@@ -51,6 +53,26 @@ npm run arena -- "How is the on-call shift?" --strategies react,plan-and-execute
 
 If `--strategies` is omitted, both strategies run. The CLI reads the same `.env` configuration as the HTTP service, connects to PostgreSQL, and prints each strategy's answer, typed trace, LLM-call count, and latency as JSON. Invalid arguments or operational failures are written to stderr and return a non-zero exit code.
 Run `npm run seed` when you want to create or refresh the sample alert fixtures. The arena CLI ensures the five service fixtures exist without resetting alert statuses.
+
+## Run the strategy benchmark
+
+```powershell
+npm run bench
+```
+
+The default run executes C1, C2, and C3 against both `react` and
+`plan-and-execute`, then prints a consolidated table containing scenario,
+strategy, accuracy, LLM-call count, and latency. A single scenario can be
+selected with `--scenario C1`, `--scenario C2`, or `--scenario C3`; add
+`--no-replanner` to skip only the plan-and-execute replanner stage. The
+benchmark checks results against PostgreSQL and removes its uniquely tagged
+incidents after checking each run. It requires the configured development
+database and OpenRouter credentials.
+
+```powershell
+npm run bench -- --scenario C2
+npm run bench -- --scenario C3 --no-replanner
+```
 
 ## Start the HTTP service
 

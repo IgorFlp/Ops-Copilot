@@ -1,7 +1,29 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AlertRecord } from "../src/agents/types.js";
-import { seedOperationalData } from "./seed.js";
+import { alertPersistenceValues, seedOperationalData } from "./seed.js";
+
+test("alert seed persistence omits the service reference attribute", () => {
+  const values = alertPersistenceValues({
+    fixtureKey: "opspilot-seed-payments-latency",
+    service: "payments-api",
+    serviceId: 10,
+    title: "Payment latency",
+    description: "Latency is above threshold.",
+    status: "firing",
+    severity: "critical",
+  });
+
+  assert.deepEqual(values, {
+    fixtureKey: "opspilot-seed-payments-latency",
+    serviceId: 10,
+    title: "Payment latency",
+    description: "Latency is above threshold.",
+    status: "firing",
+    severity: "critical",
+  });
+  assert.equal("service" in values, false);
+});
 
 test("seed is idempotent and preserves unrelated services and alerts", async () => {
   const services = new Map([
@@ -18,6 +40,7 @@ test("seed is idempotent and preserves unrelated services and alerts", async () 
         title: "Unrelated alert",
         description: "Keep me too",
         status: "firing",
+        severity: "low",
       },
     ],
   ]);
@@ -46,6 +69,7 @@ test("seed is idempotent and preserves unrelated services and alerts", async () 
         title: string;
         description: string;
         status: "firing" | "resolved";
+        severity: "critical" | "high" | "medium" | "low";
       },
     ) {
       const service = [...services.values()].find(
@@ -61,6 +85,7 @@ test("seed is idempotent and preserves unrelated services and alerts", async () 
         title: alert.title,
         description: alert.description,
         status: alert.status,
+        severity: alert.severity,
       });
     },
   };
@@ -95,6 +120,23 @@ test("seed is idempotent and preserves unrelated services and alerts", async () 
   assert.equal(
     [...alerts.values()].filter((alert) => alert.fixtureKey.startsWith("opspilot-seed") && alert.status === "resolved").length,
     3,
+  );
+  assert.equal(
+    alerts.get("opspilot-seed-payments-latency")?.severity,
+    "critical",
+  );
+  assert.equal(
+    alerts.get("opspilot-seed-checkout-errors")?.severity,
+    "critical",
+  );
+  assert.equal(alerts.get("opspilot-seed-orders-queue")?.severity, "high");
+  assert.deepEqual(
+    [
+      alerts.get("opspilot-seed-inventory-recovered")?.severity,
+      alerts.get("opspilot-seed-notifications-recovered")?.severity,
+      alerts.get("opspilot-seed-payments-recovered")?.severity,
+    ],
+    ["medium", "medium", "medium"],
   );
   assert.equal(services.has("unrelated-service"), true);
   assert.equal(alerts.has("unrelated-alert"), true);

@@ -8,7 +8,8 @@
     "predev": "npm run seed",
     "seed": "node --env-file-if-exists=.env --import tsx scripts/seed.ts",
     "arena": "node --env-file-if-exists=.env --import tsx src/arena.ts",
-    "bench": "src/bench.ts",
+    "db:migrate:alert-severity": "node --env-file-if-exists=.env --import tsx scripts/migrate-alert-severity.ts",
+    "bench": "node --env-file-if-exists=.env --import tsx src/bench.ts",
     "test": "node --import tsx --test src/**/*.test.ts scripts/**/*.test.ts",
     "typecheck": "tsc --noEmit"
   },

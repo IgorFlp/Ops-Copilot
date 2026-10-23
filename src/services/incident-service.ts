@@ -96,7 +96,10 @@ const databaseStore: IncidentServiceStore = {
     const alerts = await Alert.findAll({
       ...(status === "all" ? {} : { where: { status } }),
       include: [{ model: Service, as: "service", required: true }],
-      order: [["id", "ASC"]],
+      order: [
+        ["createdAt", "ASC"],
+        ["id", "ASC"],
+      ],
     });
     return alerts.map((alert) => {
       const service = alert.service as Service | undefined;
@@ -111,6 +114,7 @@ const databaseStore: IncidentServiceStore = {
         title: alert.title,
         description: alert.description,
         status: alert.status,
+        severity: alert.severity,
       };
     });
   },
