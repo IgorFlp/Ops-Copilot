@@ -2,7 +2,10 @@ export type DomainErrorCode =
   | "NOT_FOUND"
   | "CONFLICT"
   | "VALIDATION"
-  | "CONFIGURATION";
+  | "CONFIGURATION"
+  | "UNSUPPORTED_STRATEGY"
+  | "TIMEOUT"
+  | "INTERNAL";
 
 export class DomainError extends Error {
   constructor(

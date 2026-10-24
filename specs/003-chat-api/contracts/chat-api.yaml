@@ -1,0 +1,166 @@
+openapi: 3.1.0
+info:
+  title: OpsCopilot Chat API
+  version: 1.0.0
+paths:
+  /chat:
+    post:
+      summary: Run one operational reasoning strategy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+            examples:
+              defaultStrategy:
+                summary: Use the default ReAct strategy
+                value:
+                  message: "What critical alerts are firing?"
+              reflectedPlan:
+                summary: Reflect on a plan-and-execute response
+                value:
+                  message: "Investigate firing alerts and recommend next steps."
+                  strategy: plan-and-execute
+                  reflect: true
+      responses:
+        "200":
+          description: The reasoning result returned by the selected strategy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatResult"
+        "400":
+          description: The request body is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+        "422":
+          description: The strategy name is not registered.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatError"
+        "500":
+          description: Strategy execution or reflection failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatError"
+        "504":
+          description: Strategy execution exceeded 180 seconds.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatError"
+components:
+  schemas:
+    ChatRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          minLength: 1
+          description: Must contain a non-whitespace character.
+        strategy:
+          type: string
+          default: react
+          description: A registered base strategy name.
+          examples:
+            - react
+            - plan-and-execute
+        reflect:
+          type: boolean
+          default: false
+          description: Apply reflection to the selected base strategy.
+    ChatResult:
+      type: object
+      additionalProperties: false
+      required:
+        - answer
+        - trace
+        - metrics
+      properties:
+        answer:
+          type: string
+        trace:
+          type: array
+          items:
+            $ref: "#/components/schemas/TraceEvent"
+        metrics:
+          $ref: "#/components/schemas/Metrics"
+    TraceEvent:
+      type: object
+      required:
+        - type
+        - content
+      properties:
+        type:
+          type: string
+          enum:
+            - thought
+            - action
+            - observation
+            - plan
+            - critique
+            - answer
+        content:
+          type: string
+        timestamp:
+          type: string
+        tools:
+          type: array
+          items:
+            type: string
+        args:
+          type: object
+          additionalProperties: true
+        approved:
+          type: boolean
+    Metrics:
+      type: object
+      required:
+        - calls
+        - latencyMs
+      properties:
+        calls:
+          type: integer
+          minimum: 0
+        latencyMs:
+          type: number
+          minimum: 0
+    ValidationError:
+      type: object
+      required:
+        - error
+        - issues
+      properties:
+        error:
+          type: string
+        issues:
+          type: array
+          items:
+            type: object
+            required:
+              - path
+              - message
+            properties:
+              path:
+                type: array
+                items:
+                  oneOf:
+                    - type: string
+                    - type: integer
+              message:
+                type: string
+    ChatError:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
