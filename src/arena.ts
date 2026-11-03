@@ -1,6 +1,9 @@
 import { arenaService } from "./services/arena-service.js";
-import { closeDatabase } from "./models/database.js";
-import { ensureSeededServices } from "./services/service-fixtures.js";
+import {
+  closeDefaultOpsStore,
+  getDefaultOpsStore,
+} from "./store/default-ops-store.js";
+import { seedOperationalData } from "../scripts/seed.js";
 import {
   formatArenaResults,
   parseArenaCliArguments,
@@ -9,7 +12,7 @@ import {
 async function main(): Promise<void> {
   const options = parseArenaCliArguments(process.argv.slice(2));
   try {
-    await ensureSeededServices();
+    await seedOperationalData(getDefaultOpsStore());
     const results = await arenaService.run(options.input, {
       strategyNames: options.strategies,
       maxIterations: options.maxIterations,
@@ -17,7 +20,7 @@ async function main(): Promise<void> {
     });
     process.stdout.write(`${formatArenaResults(results)}\n`);
   } finally {
-    await closeDatabase();
+    closeDefaultOpsStore();
   }
 }
 

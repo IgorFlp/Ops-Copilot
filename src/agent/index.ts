@@ -1,5 +1,7 @@
-import { planAndExecuteStrategy } from "../agents/plan-and-execute.js";
-import { reactStrategy } from "../agents/react.js";
+import { getDefaultOpsStore } from "../store/default-ops-store.js";
+import type { IncidentServiceStore } from "../services/incident-service.js";
+import { createPlanAndExecuteStrategy } from "../agents/plan-and-execute.js";
+import { createReactStrategy } from "../agents/react.js";
 import { withReflection } from "../agents/reflection.js";
 import type { ReasoningStrategy } from "../agents/types.js";
 import { DomainError } from "../errors/domain-error.js";
@@ -17,7 +19,16 @@ export interface StrategyRegistry {
   resolve(name?: string, reflect?: boolean): ResolvedStrategy;
 }
 
-const defaultStrategies = [reactStrategy, planAndExecuteStrategy];
+export function createOperationalStrategies(
+  store: IncidentServiceStore = getDefaultOpsStore(),
+): ReasoningStrategy[] {
+  return [
+    createReactStrategy(undefined, store),
+    createPlanAndExecuteStrategy(undefined, store),
+  ];
+}
+
+export const defaultStrategies = createOperationalStrategies();
 
 export function createStrategyRegistry(
   availableStrategies: ReasoningStrategy[] = defaultStrategies,

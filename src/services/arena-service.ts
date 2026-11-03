@@ -1,6 +1,5 @@
 import { DomainError } from "../errors/domain-error.js";
-import { planAndExecuteStrategy } from "../agents/plan-and-execute.js";
-import { reactStrategy } from "../agents/react.js";
+import { defaultStrategies } from "../agent/index.js";
 import { withReflection } from "../agents/reflection.js";
 import {
   ReasoningResult,
@@ -9,10 +8,8 @@ import {
 } from "../agents/types.js";
 
 export const strategies: ReasoningStrategy[] = [
-  reactStrategy,
-  planAndExecuteStrategy,
-  withReflection(reactStrategy),
-  withReflection(planAndExecuteStrategy),
+  ...defaultStrategies,
+  ...defaultStrategies.map((strategy) => withReflection(strategy)),
 ];
 
 export interface ArenaRunOptions extends StrategyRunOptions {

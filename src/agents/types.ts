@@ -1,5 +1,15 @@
-import type { AlertSeverity, AlertStatus } from "../models/alert.js";
-import type { IncidentSeverity, IncidentStatus } from "../models/incident.js";
+import type {
+  AlertRecord,
+  IncidentRecord,
+  IncidentSeverity,
+} from "../store/ops-store.js";
+import type {
+  AlertSeverity,
+  AlertStatus,
+  IncidentStatus,
+} from "../store/ops-store.js";
+
+export type { AlertRecord, IncidentRecord } from "../store/ops-store.js";
 
 export type TraceEventType =
   | "thought"
@@ -53,22 +63,4 @@ export interface ReasoningStrategy {
   run(input: string, options?: StrategyRunOptions): Promise<ReasoningResult>;
 }
 
-export interface AlertRecord {
-  id: number;
-  fixtureKey: string;
-  serviceId: number;
-  service: string;
-  title: string;
-  description: string;
-  status: AlertStatus;
-  severity: AlertSeverity;
-}
-
-export interface IncidentRecord {
-  id: number;
-  serviceId: number;
-  service: string;
-  title: string;
-  severity: IncidentSeverity;
-  status: IncidentStatus;
-}
+export type { AlertSeverity, AlertStatus, IncidentSeverity, IncidentStatus };

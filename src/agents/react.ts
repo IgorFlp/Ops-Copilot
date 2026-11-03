@@ -1,6 +1,7 @@
 import { AIMessage, BaseMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { DomainError } from "../errors/domain-error.js";
+import type { IncidentServiceStore } from "../services/incident-service.js";
 import { createModel } from "./model.js";
 import {
   ReasoningResult,
@@ -9,7 +10,7 @@ import {
   StrategyRunOptions,
   TraceEvent,
 } from "./types.js";
-import { createOpsTools } from "./tools.js";
+import { createOpsToolsForRequest } from "./tools.js";
 
 const DEFAULT_MAX_ITERATIONS = 8;
 const MAX_ITERATIONS = 100;
@@ -19,12 +20,14 @@ type ReactAgentInvoker = (
   input: string,
   maxIterations: number,
   reflectionContext?: ReflectionContext,
+  store?: IncidentServiceStore,
 ) => Promise<ReactAgentOutput>;
 
 async function invokeAgent(
   input: string,
   maxIterations: number,
   reflectionContext?: ReflectionContext,
+  store?: IncidentServiceStore,
 ): Promise<ReactAgentOutput> {
   const retryContext = reflectionContext
     ? [
@@ -37,7 +40,13 @@ async function invokeAgent(
     : "";
   const agent = createReactAgent({
     llm: createModel(),
-    tools: [...createOpsTools(undefined, reflectionContext?.completedActions)],
+    tools: [
+      ...createOpsToolsForRequest(
+        input,
+        store,
+        reflectionContext?.completedActions,
+      ),
+    ],
     prompt:
       "Act as an operations assistant. Use operational tools when needed. " +
       "Provide concise user-facing summaries; never reveal private reasoning.",
@@ -110,6 +119,7 @@ function buildTrace(messages: BaseMessage[]): TraceEvent[] {
 
 export function createReactStrategy(
   invoker: ReactAgentInvoker = invokeAgent,
+  store?: IncidentServiceStore,
 ): ReasoningStrategy {
   return {
     name: "react",
@@ -137,6 +147,7 @@ export function createReactStrategy(
         input,
         maxIterations,
         options.reflectionContext,
+        store,
       );
       const answer = [...messages]
         .reverse()

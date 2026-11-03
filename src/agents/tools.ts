@@ -2,11 +2,21 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import {
   createIncidentService,
+} from "../services/incident-service.js";
+import type {
   IncidentServiceStore,
 } from "../services/incident-service.js";
 import { ReflectionAction } from "./types.js";
+import { getDefaultOpsStore } from "../store/default-ops-store.js";
+import { isMutationAuthorized } from "./mutation-policy.js";
 
 const alertStatusSchema = z.enum(["firing", "resolved", "all"]).default("firing");
+const incidentStatusSchema = z
+  .enum(["open", "resolved", "all"])
+  .default("open")
+  .describe(
+    "Incident status to list: open, resolved, or all. Defaults to open. Read-only; does not change incident state.",
+  );
 const severityValues = ["critical", "high", "medium", "low"] as const;
 const severityEnum = z.enum(severityValues);
 const severitySchema = z
@@ -31,21 +41,56 @@ const severitySchema = z
   .describe(
     "Severity: critical, high, medium, or low. Incident levels SEV-1 through SEV-4 map to critical, high, medium, and low respectively.",
   );
-const listAlertsInputSchema = z.object({ status: alertStatusSchema });
+const listAlertsInputSchema = z.object({
+  status: alertStatusSchema.describe(
+    "Alert status to list: firing, resolved, or all. Defaults to firing. Read-only; does not change alert state.",
+  ),
+});
 const openIncidentInputSchema = z.object({
-  title: z.string().trim().min(1).max(200),
+  title: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .describe("Non-empty incident title, up to 200 characters."),
   service: z
     .string()
     .trim()
     .min(1)
     .max(120)
     .describe(
-      "Existing service slug, service name, or unambiguous short service reference such as checkout, payments, or catalog.",
+      "Existing service slug, service name, or unambiguous short service reference. Use only a service that is affected by an operator-requested incident.",
     ),
   severity: severitySchema,
+  summary: z
+    .string()
+    .trim()
+    .max(4000)
+    .nullable()
+    .optional()
+    .describe(
+      "Optional incident summary of up to 4000 characters; omit or pass null when no summary is available.",
+    ),
 });
 const resolveIncidentInputSchema = z.object({
-  id: z.number().int().positive(),
+  id: z
+    .number()
+    .int()
+    .positive()
+    .describe("Positive numeric identifier of an existing open incident."),
+});
+const listIncidentsInputSchema = z.object({
+  status: incidentStatusSchema,
+});
+const runbookInputSchema = z.object({
+  service: z
+    .string()
+    .trim()
+    .min(1)
+    .max(120)
+    .describe(
+      "Non-empty service slug, service name, or unambiguous service reference whose runbook should be read.",
+    ),
 });
 
 function stableValue(value: unknown): string {
@@ -79,14 +124,16 @@ function canonicalActionArgs(
       ? args.severity.trim().toLowerCase().replace(/^sev[-\s]?([1-4])$/, (_match, level: string) =>
           ["critical", "high", "medium", "low"][Number(level) - 1],
         )
-      : args.severity;
+        : args.severity;
+  const summary =
+    typeof args.summary === "string" ? args.summary.trim() : args.summary;
   return {
-    ...args,
     ...(typeof args.title === "string" ? { title: args.title.trim() } : {}),
     ...(typeof args.service === "string"
-      ? { service: args.service.trim() }
-      : {}),
+        ? { service: args.service.trim() }
+        : {}),
     ...(severity === undefined ? {} : { severity }),
+    ...(summary === undefined ? {} : { summary }),
   };
 }
 
@@ -108,23 +155,23 @@ export function createOpsTools(
   store?: IncidentServiceStore,
   completedActions: ReflectionAction[] = [],
 ) {
-  const service = store
-    ? createIncidentService(store)
-    : createIncidentService();
+  const service = () =>
+    createIncidentService(store ?? getDefaultOpsStore());
 
   const listAlerts = tool(
-    async ({ status }) => JSON.stringify(await service.listAlerts(status)),
+    async ({ status }) =>
+      JSON.stringify(await service().listAlerts(status)),
     {
       name: "list_alerts",
       description:
-        "List monitoring alerts by status. Use when asked what is firing or about service health. Status: firing, resolved, or all.",
+        "Read monitoring alerts when asked what is firing, resolved, or about service health. Input status is firing, resolved, or all and defaults to firing. This is read-only and does not change alert state.",
       schema: listAlertsInputSchema,
     },
   );
 
   const openIncident = tool(
-    async ({ title, service: serviceSlug, severity }) => {
-      const args = { title, service: serviceSlug, severity };
+    async ({ title, service: serviceSlug, severity, summary }) => {
+      const args = { title, service: serviceSlug, severity, summary };
       const previous = priorMutationObservation(
         completedActions,
         "open_incidente",
@@ -132,17 +179,18 @@ export function createOpsTools(
       );
       if (previous !== undefined) return previous;
       return JSON.stringify(
-        await service.openIncident({
+        await service().openIncident({
           title,
           service: serviceSlug,
           severity,
+          summary,
         }),
       );
     },
     {
       name: "open_incidente",
       description:
-        "Open an incident for an existing service with a title and severity. Use critical, high, medium, or low; SEV-1 maps to critical, SEV-2 to high, SEV-3 to medium, and SEV-4 to low.",
+        "Create and persist an incident only when the operator explicitly asks to open or track an incident for an affected service. Do not open one for requests to inspect alerts, summarize status, or recommend actions. Inputs: non-empty title (up to 200 characters), existing service reference, severity critical/high/medium/low (SEV-1 through SEV-4 aliases are accepted), and optional nullable summary (up to 4000 characters). This changes operational state.",
       schema: openIncidentInputSchema,
     },
   );
@@ -156,20 +204,71 @@ export function createOpsTools(
         args,
       );
       if (previous !== undefined) return previous;
-      return JSON.stringify(await service.resolveIncident(id));
+      return JSON.stringify(await service().resolveIncident(id));
     },
     {
       name: "resolve_incidente",
-      description: "Resolve an existing open incident by its numeric identifier.",
+      description:
+        "Resolve an existing open incident only when the operator explicitly requests resolution. Input id is the positive numeric incident identifier. This changes incident state and records the resolution time; an unknown or already-resolved incident fails explicitly.",
       schema: resolveIncidentInputSchema,
     },
   );
 
-  return [listAlerts, openIncident, resolveIncident] as const;
+  const listIncidents = tool(
+    async ({ status }) =>
+      JSON.stringify(await service().listIncidents(status)),
+    {
+      name: "List_incidentes",
+      description:
+        "Read incidents when asked to review tracked work. Input status is open, resolved, or all and defaults to open. This is read-only and does not change incident state.",
+      schema: listIncidentsInputSchema,
+    },
+  );
+
+  const consultRunbook = tool(
+    async ({ service: serviceReference }) =>
+      JSON.stringify(await service().getRunbook(serviceReference)),
+    {
+      name: "consultar_runbook",
+      description:
+        "Read service-specific operational guidance when asked how to investigate or respond for a service. Input service is a non-empty service slug, name, or unambiguous reference. This is read-only and does not change operational state; a missing runbook is reported explicitly.",
+      schema: runbookInputSchema,
+    },
+  );
+
+  return [
+    listAlerts,
+    openIncident,
+    resolveIncident,
+    listIncidents,
+    consultRunbook,
+  ] as const;
+}
+
+export function createOpsToolsForRequest(
+  input: string,
+  store?: IncidentServiceStore,
+  completedActions: ReflectionAction[] = [],
+) {
+  return createOpsTools(store, completedActions).filter(({ name }) => {
+    if (name === "open_incidente") {
+      return isMutationAuthorized(input, "open_incidente");
+    }
+    if (name === "resolve_incidente") {
+      return isMutationAuthorized(input, "resolve_incidente");
+    }
+    return true;
+  });
 }
 
 export const opsTools = createOpsTools();
-export const [listAlerts, openIncident, resolveIncident] = opsTools;
+export const [
+  listAlerts,
+  openIncident,
+  resolveIncident,
+  listIncidents,
+  consultRunbook,
+] = opsTools;
 
 export function normalizeToolArguments(
   name: string,
@@ -200,16 +299,22 @@ export function normalizeToolArguments(
 export function invokeOpsTool(
   name: string,
   args: Record<string, unknown>,
+  store?: IncidentServiceStore,
 ): Promise<unknown> {
+  const [alerts, open, resolve, incidents, runbook] = createOpsTools(store);
   switch (name) {
     case "list_alerts":
-      return listAlerts.invoke(listAlertsInputSchema.parse(args));
+      return alerts.invoke(listAlertsInputSchema.parse(args));
     case "open_incidente":
-      return openIncident.invoke(openIncidentInputSchema.parse(args));
+      return open.invoke(openIncidentInputSchema.parse(args));
     case "resolve_incidente":
-      return resolveIncident.invoke(
+      return resolve.invoke(
         resolveIncidentInputSchema.parse(normalizeToolArguments(name, args)),
       );
+    case "List_incidentes":
+      return incidents.invoke(listIncidentsInputSchema.parse(args));
+    case "consultar_runbook":
+      return runbook.invoke(runbookInputSchema.parse(args));
     default:
       throw new Error(`Unknown operational tool: ${name}`);
   }

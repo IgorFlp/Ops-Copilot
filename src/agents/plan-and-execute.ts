@@ -1,7 +1,18 @@
 import { z } from "zod";
 import { END, START, Annotation, StateGraph } from "@langchain/langgraph";
 import { DomainError } from "../errors/domain-error.js";
+import { getDefaultOpsStore } from "../store/default-ops-store.js";
+import type { IncidentServiceStore } from "../services/incident-service.js";
 import { createModel } from "./model.js";
+import {
+  hasOperationalIntent,
+  isMutationAuthorized,
+  normalizeIntent,
+} from "./mutation-policy.js";
+export {
+  hasOperationalIntent,
+  isMutationAuthorized,
+} from "./mutation-policy.js";
 import { invokeOpsTool, normalizeToolArguments } from "./tools.js";
 import {
   ReasoningResult,
@@ -15,77 +26,6 @@ import { priorMutationObservation } from "./tools.js";
 const DEFAULT_MAX_ITERATIONS = 8;
 const MAX_ITERATIONS = 100;
 const MAX_STEPS = 8;
-const INCIDENT_REFERENCE =
-  "(?:incidente|incidentes|incident|incidents)";
-const INCIDENT_MODIFIER =
-  "(?:(?:um|uma|o|a|os|as|the|an|new|novo|nova|primeiro|primeira|first|[0-9]+|one|two|three|four|five|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|critical|high|medium|low|severity|severidade|p[1-4]|sev[- ]?[1-4])\\s+){0,4}";
-const OPEN_INCIDENT_INTENT = new RegExp(
-  `\\b(?:abra|abrir|crie|criar|registre|registrar|open|create)\\s+${INCIDENT_MODIFIER}\\b${INCIDENT_REFERENCE}\\b`,
-  "i",
-);
-const RESOLVE_INCIDENT_INTENT = new RegExp(
-  `\\b(?:resolva|resolver|resolve|close|feche|fechar)\\s+${INCIDENT_MODIFIER}\\b${INCIDENT_REFERENCE}\\b`,
-  "i",
-);
-const RESOLVE_FIRST_INTENT =
-  /\b(resolva|resolver|resolve|close|feche|fechar)\s+(?:o|a|the)?\s*(?:primeiro|primeira|first)\b/i;
-
-function normalizeIntent(input: string): string {
-  return input
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-}
-
-function hasPositiveIntent(
-  normalized: string,
-  expression: RegExp,
-): boolean {
-  const match = expression.exec(normalized);
-  if (!match) return false;
-  const prefix = normalized.slice(Math.max(0, match.index - 40), match.index);
-  return (
-    !/\b(?:nao|not|never|avoid|without|dont|don't)\b(?:\s+[\w'-]+){0,3}\s*$/i.test(
-      prefix,
-    ) &&
-    !/\b(?:to|para)\s*$/i.test(prefix)
-  );
-}
-
-function hasResolveIntent(normalized: string): boolean {
-  return (
-    hasPositiveIntent(normalized, RESOLVE_INCIDENT_INTENT) ||
-    (hasPositiveIntent(normalized, RESOLVE_FIRST_INTENT) &&
-      /\b(incidente|incidentes|incident|incidents)\b/i.test(normalized))
-  );
-}
-
-export function isMutationAuthorized(
-  input: string,
-  tool: OpsToolName,
-): boolean {
-  const normalized = normalizeIntent(input);
-  if (tool === "open_incidente") {
-    return hasPositiveIntent(normalized, OPEN_INCIDENT_INTENT);
-  }
-  if (tool === "resolve_incidente") {
-    return hasResolveIntent(normalized);
-  }
-  return true;
-}
-
-function hasOperationalIntent(input: string): boolean {
-  const normalized = normalizeIntent(input);
-  return (
-    /\b(liste|listar|mostre|mostrar|list|show)\b/i.test(normalized) ||
-    /\b(analise|analisar|investigue|investigar|analyze|investigate)\b.{0,40}\b(alertas?|incidentes?|alerts?|incidents?)\b/i.test(
-      normalized,
-    ) ||
-    hasPositiveIntent(normalized, OPEN_INCIDENT_INTENT) ||
-    hasResolveIntent(normalized)
-  );
-}
-
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (
@@ -115,7 +55,13 @@ const planSchema = z.object({
 const executionSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("tool"),
-    tool: z.enum(["list_alerts", "open_incidente", "resolve_incidente"]),
+    tool: z.enum([
+      "list_alerts",
+      "open_incidente",
+      "resolve_incidente",
+      "List_incidentes",
+      "consultar_runbook",
+    ]),
     args: z.record(z.string(), z.unknown()),
   }),
   z.object({
@@ -297,6 +243,8 @@ const operationalToolNames = new Set([
   "list_alerts",
   "open_incidente",
   "resolve_incidente",
+  "List_incidentes",
+  "consultar_runbook",
 ]);
 
 function normalizeExecutorCandidate(candidate: unknown): unknown {
@@ -581,6 +529,7 @@ export interface PlanExecutionDependencies {
     done: CompletedStep[],
     input: string,
     reflectionContext?: ReflectionContext,
+    store?: IncidentServiceStore,
   ): Promise<ExecutionOutput>;
   replan(
     input: string,
@@ -605,7 +554,7 @@ const modelDependencies: PlanExecutionDependencies = {
           "Only add an incident-opening or incident-resolution step when the user directly and explicitly requests that mutation. " +
           "Asking to create a plan, report, or recommendations is not a request to create an incident. " +
           "For incident analysis without an explicit mutation request, inspect alerts and produce recommendations without changing incident state. " +
-          "Use only operations available through list_alerts, open_incidente, and resolve_incidente. " +
+          "Use only operations available through list_alerts, List_incidentes, consultar_runbook, open_incidente, and resolve_incidente. " +
           "For an incident request, include its requested service, title, and severity in the step. " +
           "Return an empty plan only when the user asks a question that can be answered without an operational tool.",
       ],
@@ -639,11 +588,13 @@ const modelDependencies: PlanExecutionDependencies = {
       throw stageError("Planner model output", error);
     }
   },
-  async execute(step, done, input, reflectionContext) {
+  async execute(step, done, input, reflectionContext, store) {
     const canOpenIncident = isMutationAuthorized(input, "open_incidente");
     const canResolveIncident = isMutationAuthorized(input, "resolve_incidente");
     const availableTools = [
       "list_alerts(status: firing | resolved | all)",
+      "List_incidentes(status: open | resolved | all)",
+      "consultar_runbook(service)",
       ...(canOpenIncident
         ? ["open_incidente(title, service, severity: critical | high | medium | low)"]
         : []),
@@ -658,13 +609,13 @@ const modelDependencies: PlanExecutionDependencies = {
     const messages: PromptMessage[] = [
       [
         "system",
-        'Classify the provided plan step and return only one JSON object matching either {"kind":"tool","tool":"list_alerts|open_incidente|resolve_incidente","args":{...}} or {"kind":"reasoning","observation":"..."}. Do not call or request tools directly. ' +
+        'Classify the provided plan step and return only one JSON object matching either {"kind":"tool","tool":"list_alerts|open_incidente|resolve_incidente|List_incidentes|consultar_runbook","args":{...}} or {"kind":"reasoning","observation":"..."}. Do not call or request tools directly. ' +
           "Return exactly one selection. " +
           "For an executable operation, select one available tool " +
           `and supply its arguments. Available tools for this request: ${availableTools.join(", ")}. ` +
           "Do not select or invoke any tool not listed as available. " +
           "For a step that analyzes, compares, identifies causes, or summarizes information already present in completed steps, return kind=reasoning with a concise, user-facing observation grounded only in those completed observations. " +
-          "Do not treat a reasoning step as a request to call a tool. If the step requires new operational data, use list_alerts. " +
+          "Do not treat a reasoning step as a request to call a tool. For alert data, use list_alerts; for tracked incidents, use List_incidentes; for service-specific guidance, use consultar_runbook. " +
           "Never invent tool names or results. " +
           "Map SEV-1 to critical, SEV-2 to high, SEV-3 to medium, and SEV-4 to low. " +
           "For service, use the canonical slug when known, or the service name/reference exactly as stated in the step. " +
@@ -740,7 +691,11 @@ const modelDependencies: PlanExecutionDependencies = {
     }
     let result: unknown;
     try {
-      result = await invokeOpsTool(selection.tool, args);
+      result = await invokeOpsTool(
+        selection.tool,
+        args,
+        store ?? getDefaultOpsStore(),
+      );
     } catch (error) {
       throw stageError(`Executor tool ${selection.tool}`, error);
     }
@@ -817,6 +772,7 @@ const PlanState = Annotation.Root({
 
 export function createPlanAndExecuteStrategy(
   dependencies: PlanExecutionDependencies = modelDependencies,
+  store?: IncidentServiceStore,
 ): ReasoningStrategy {
   return {
     name: "plan-and-execute",
@@ -873,6 +829,7 @@ export function createPlanAndExecuteStrategy(
               state.done,
               state.input,
               options.reflectionContext,
+              store,
             );
           } catch (error) {
             const completed = state.done

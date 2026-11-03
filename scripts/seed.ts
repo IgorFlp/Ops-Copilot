@@ -1,23 +1,13 @@
-import type { AlertSeverity, AlertStatus } from "../src/models/alert.js";
-import { sequelize } from "../src/models/database.js";
-import { Service } from "../src/models/service.js";
-import { Alert } from "../src/models/alert.js";
-import { ensureServiceFixtures } from "../src/services/service-fixtures.js";
-import type { ServiceFixture } from "../src/services/service-fixtures.js";
-import { migrateAlertSeverity } from "./migrate-alert-severity.js";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { serviceFixtures } from "../src/services/service-fixtures.js";
+import { SqliteOpsStore } from "../src/store/sqlite-ops-store.js";
+import type {
+  AlertInput,
+  RunbookInput,
+} from "../src/store/ops-store.js";
 
-interface AlertSeed {
-  fixtureKey: string;
-  service: string;
-  title: string;
-  description: string;
-  status: AlertStatus;
-  severity: AlertSeverity;
-}
-
-const alertFixtures: AlertSeed[] = [
+export const alertFixtures: AlertInput[] = [
   {
     fixtureKey: "opspilot-seed-payments-latency",
     service: "payments-api",
@@ -35,10 +25,10 @@ const alertFixtures: AlertSeed[] = [
     severity: "critical",
   },
   {
-    fixtureKey: "opspilot-seed-orders-queue",
-    service: "orders-api",
-    title: "Order queue backlog growing",
-    description: "The order processing queue is above its target depth.",
+    fixtureKey: "opspilot-seed-auth-errors",
+    service: "auth-api",
+    title: "Authentication error rate elevated",
+    description: "Authentication failures exceeded the recent baseline.",
     status: "firing",
     severity: "high",
   },
@@ -51,7 +41,7 @@ const alertFixtures: AlertSeed[] = [
     severity: "medium",
   },
   {
-    fixtureKey: "opspilot-seed-notifications-recovered",
+    fixtureKey: "opspilot-seed-catalog-recovered",
     service: "catalog-api",
     title: "Catalog synchronization recovered",
     description: "Catalog synchronization returned to normal.",
@@ -68,64 +58,45 @@ const alertFixtures: AlertSeed[] = [
   },
 ];
 
-export interface SeedStore {
-  upsertService(service: ServiceFixture): Promise<{ id: number }>;
-  upsertAlert(
-    alert: AlertSeed & { serviceId: number },
-  ): Promise<void>;
-}
+export const runbookFixtures: RunbookInput[] = [
+  {
+    service: "checkout-api",
+    title: "Checkout service incident response",
+    content:
+      "Check checkout error rate and dependency health. Correlate failures with payment and authentication alerts, record customer impact, and escalate to the owning service team.",
+  },
+  {
+    service: "payments-api",
+    title: "Payments service incident response",
+    content:
+      "Check payment latency and gateway connectivity. Confirm the affected payment flow, preserve transaction references for investigation, and coordinate recovery with the payment provider.",
+  },
+  {
+    service: "auth-api",
+    title: "Authentication service incident response",
+    content:
+      "Check authentication error rate and identity-provider availability. Verify token issuance and login failures, identify affected clients, and escalate credential or access anomalies through the security response process.",
+  },
+];
 
-export function alertPersistenceValues(
-  fixture: AlertSeed & { serviceId: number },
-): Omit<AlertSeed, "service"> & { serviceId: number } {
-  const { service: _service, ...values } = fixture;
-  return values;
-}
-
-export async function seedOperationalData(store: SeedStore): Promise<void> {
-  const serviceIds = await ensureServiceFixtures(store);
-
-  for (const fixture of alertFixtures) {
-    const serviceId = serviceIds.get(fixture.service);
-    if (!serviceId) {
-      throw new Error(`Seed references unknown service: ${fixture.service}`);
-    }
-    await store.upsertAlert({ ...fixture, serviceId });
-  }
+export async function seedOperationalData(
+  store: SqliteOpsStore,
+): Promise<void> {
+  store.seedOperationalData(serviceFixtures, alertFixtures, runbookFixtures);
 }
 
 export async function seedOperationalDatabase(): Promise<void> {
-  await migrateAlertSeverity();
-  await sequelize.transaction(async (transaction) => {
-    await seedOperationalData({
-      async upsertService(fixture) {
-        const [service, created] = await Service.findOrCreate({
-          where: { slug: fixture.slug },
-          defaults: fixture,
-          transaction,
-        });
-        if (!created) await service.update(fixture, { transaction });
-        return { id: service.id };
-      },
-      async upsertAlert(fixture) {
-        const values = alertPersistenceValues(fixture);
-        const { serviceId, ...alertValues } = values;
-        const [alert, created] = await Alert.findOrCreate({
-          where: { fixtureKey: fixture.fixtureKey },
-          defaults: values,
-          transaction,
-        });
-        if (!created) {
-          await alert.update({ ...alertValues, serviceId }, { transaction });
-        }
-      },
-    });
-  });
+  const store = new SqliteOpsStore();
+  try {
+    await seedOperationalData(store);
+  } finally {
+    store.close();
+  }
 }
 
 async function runSeed(): Promise<void> {
   await seedOperationalDatabase();
-  console.info("Seeded 5 services and 6 alerts (3 firing, 3 resolved).");
+  console.info("Seeded 5 services, 6 alerts, and 3 runbooks.");
 }
 
 if (

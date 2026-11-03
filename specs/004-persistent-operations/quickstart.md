@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Node.js 22.13 or newer in the Node 22 line, for built-in `node:sqlite`
+- Node.js `>=22.13.0`, for built-in `node:sqlite`
   without an experimental command-line flag.
 - Project dependencies installed with `npm install`.
 - No model-provider credentials are needed for store-only tests.
@@ -12,7 +12,8 @@
 1. Construct the operations SQLite store with the `.memory` sentinel. It must
    use an isolated in-memory database, not create a `.memory` file.
 2. Initialize the schema and seed twice.
-3. Verify five services, six alerts (three firing and three resolved), and
+3. Verify the four tables (`services`, `alerts`, `incidents`, `runbooks`),
+   five services, six alerts (three firing and three resolved), and
    checkout/payments/auth runbooks with no duplicate fixtures.
 4. Open an incident, list incidents with no filter and with `resolved`/`all`,
    resolve the incident, then verify open/resolved filtering and `resolved_at`.
@@ -44,9 +45,11 @@ unset, the application uses `./data/opspilot.db`. Verify:
 ## Validate tool composition
 
 Use the contracts in [contracts/ops-tools.md](contracts/ops-tools.md) to
-exercise all five tools. Verify descriptions include purpose, usage guidance,
-all fields, closed values/defaults, and state-change intent. Run deterministic
-benchmark scenarios against the existing in-memory mock and compare their
-answers and side effects with baseline expectations.
+exercise all five tools: `list_alerts`, `open_incidente`,
+`resolve_incidente`, `List_incidentes`, and `consultar_runbook`. Verify
+descriptions include purpose, usage guidance, all fields, closed
+values/defaults, and state-change intent. Run deterministic benchmark
+scenarios against an isolated SQLite `.memory` store and compare their answers
+and side effects with baseline expectations.
 
 For the entity fields and constraints, see [data-model.md](data-model.md).

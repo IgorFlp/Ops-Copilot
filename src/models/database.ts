@@ -1,51 +1,29 @@
-import { Sequelize } from "sequelize";
-import { DomainError } from "../errors/domain-error.js";
+import { mkdirSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import { dirname, isAbsolute, resolve } from "node:path";
 
-const databaseUrl = process.env.DATABASE_URL;
+export const DEFAULT_DATABASE_PATH = "./data/opspilot.db";
+export const MEMORY_DATABASE_PATH = ".memory";
 
-export const sequelize = databaseUrl
-  ? new Sequelize(databaseUrl, {
-      dialect: "postgres",
-      logging: false,
-      password:
-        process.env.PGPASSWORD ||
-        decodeURIComponent(new URL(databaseUrl).password),
-    })
-  : new Sequelize(
-      process.env.PGDATABASE ?? "ops_pilot",
-      process.env.PGUSER ?? "postgres",
-      process.env.PGPASSWORD ?? "",
-      {
-        dialect: "postgres",
-        host: process.env.PGHOST ?? "127.0.0.1",
-        port: Number(process.env.PGPORT ?? 5432),
-        logging: false,
-      },
-    );
-
-let ready: Promise<void> | undefined;
-
-export function ensureDatabaseReady(): Promise<void> {
-  ready ??= (async () => {
-    const urlPassword = databaseUrl
-      ? new URL(databaseUrl).password
-      : "";
-    if (!process.env.PGPASSWORD && !urlPassword) {
-      throw new DomainError(
-        "Configure PGPASSWORD or include credentials in DATABASE_URL",
-        "CONFIGURATION",
-      );
-    }
-    await sequelize.authenticate();
-    await sequelize.sync();
-  })().catch((error: unknown) => {
-    ready = undefined;
-    throw error;
-  });
-  return ready;
+export function resolveDatabasePath(
+  path = process.env.OPSPILOT_DB ?? DEFAULT_DATABASE_PATH,
+): string {
+  if (path === MEMORY_DATABASE_PATH || path === ":memory:") {
+    return ":memory:";
+  }
+  const resolvedPath = isAbsolute(path) ? path : resolve(path);
+  mkdirSync(dirname(resolvedPath), { recursive: true });
+  return resolvedPath;
 }
 
-export async function closeDatabase(): Promise<void> {
-  ready = undefined;
-  await sequelize.close();
+export function openDatabase(
+  path = process.env.OPSPILOT_DB ?? DEFAULT_DATABASE_PATH,
+): DatabaseSync {
+  const database = new DatabaseSync(resolveDatabasePath(path));
+  database.exec("PRAGMA foreign_keys = ON");
+  return database;
+}
+
+export function closeDatabase(database: DatabaseSync): void {
+  database.close();
 }

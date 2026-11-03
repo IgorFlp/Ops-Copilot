@@ -2,15 +2,17 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { DomainError } from "./errors/domain-error.js";
-import { Alert } from "./models/alert.js";
-import type { AlertSeverity, AlertStatus } from "./models/alert.js";
-import { closeDatabase } from "./models/database.js";
-import { Incident } from "./models/incident.js";
-import { Service } from "./models/service.js";
-import { seedOperationalDatabase } from "../scripts/seed.js";
-import { planAndExecuteStrategy } from "./agents/plan-and-execute.js";
-import { reactStrategy } from "./agents/react.js";
+import { seedOperationalData } from "../scripts/seed.js";
+import {
+  createPlanAndExecuteStrategy,
+} from "./agents/plan-and-execute.js";
+import { createReactStrategy } from "./agents/react.js";
 import type { ReasoningResult, ReasoningStrategy } from "./agents/types.js";
+import { SqliteOpsStore } from "./store/sqlite-ops-store.js";
+import type {
+  AlertSeverity,
+  AlertStatus,
+} from "./store/ops-store.js";
 
 export type BenchmarkScenarioId = "C1" | "C2" | "C3";
 export type BenchmarkStrategyName = "react" | "plan-and-execute";
@@ -59,11 +61,6 @@ export interface BenchmarkResult {
 }
 
 const scenarioIds: readonly BenchmarkScenarioId[] = ["C1", "C2", "C3"];
-const strategyRegistry: readonly ReasoningStrategy[] = [
-  reactStrategy,
-  planAndExecuteStrategy,
-];
-
 function parseScenario(value: string): BenchmarkScenarioId {
   const normalized = value.toUpperCase();
   if (!scenarioIds.includes(normalized as BenchmarkScenarioId)) {
@@ -422,17 +419,17 @@ function prepareScenario(
   };
 }
 
-async function readDatabaseState(): Promise<BenchmarkState> {
+async function readDatabaseState(store: SqliteOpsStore): Promise<BenchmarkState> {
   const [services, alerts, incidents] = await Promise.all([
-    Service.findAll({ attributes: ["id", "slug"] }),
-    Alert.findAll({ order: [["id", "ASC"]] }),
-    Incident.findAll({ order: [["id", "ASC"]] }),
+    store.listServices(),
+    store.listAlerts("all"),
+    store.listIncidents("all"),
   ]);
   const serviceSlugs = new Map(services.map(({ id, slug }) => [id, slug]));
   return {
-    alerts: alerts.map((alert) => {
-      const serviceSlug = serviceSlugs.get(alert.serviceId);
-      if (!serviceSlug) {
+    alerts: alerts.map((alert, index) => {
+      const service = services.find(({ id }) => id === alert.serviceId);
+      if (!service) {
         throw new Error(
           `Alert ${alert.id} references missing service ${alert.serviceId}`,
         );
@@ -440,11 +437,11 @@ async function readDatabaseState(): Promise<BenchmarkState> {
       return {
         id: alert.id,
         serviceId: alert.serviceId,
-        serviceSlug,
+        serviceSlug: service.slug,
         title: alert.title,
         status: alert.status,
         severity: alert.severity,
-        createdAt: alert.createdAt,
+        createdAt: new Date(index),
       };
     }),
     incidents: incidents.map((incident) => {
@@ -465,17 +462,6 @@ async function readDatabaseState(): Promise<BenchmarkState> {
   };
 }
 
-async function cleanupRunIncidents(
-  before: BenchmarkState,
-  runPrefix: string,
-): Promise<void> {
-  const after = await readDatabaseState();
-  const incidentIds = createdIncidentIdsToCleanup(before, after, runPrefix);
-  if (incidentIds.length > 0) {
-    await Incident.destroy({ where: { id: incidentIds } });
-  }
-}
-
 function strategyName(
   strategy: ReasoningStrategy,
 ): BenchmarkStrategyName | undefined {
@@ -492,49 +478,27 @@ export async function runBenchmarks(
   const results: BenchmarkResult[] = [];
 
   for (const scenario of scenarios) {
-    for (const strategy of strategyRegistry) {
+    for (const strategyNameValue of [
+      "react",
+      "plan-and-execute",
+    ] as const) {
+      const store = new SqliteOpsStore(".memory");
+      try {
+        await seedOperationalData(store);
+        const strategy =
+          strategyNameValue === "react"
+            ? createReactStrategy(undefined, store)
+            : createPlanAndExecuteStrategy(undefined, store);
       const name = strategyName(strategy);
       if (!name) {
         throw new Error(`Unsupported benchmark strategy: ${strategy.name}`);
       }
-      await seedOperationalDatabase();
-      const before = await readDatabaseState();
+      const before = await readDatabaseState(store);
       const prepared = prepareScenario(scenario, randomUUID());
-      let result: ReasoningResult | undefined;
-      let after: BenchmarkState | undefined;
-      let runFailure: unknown;
-      let failed = false;
-
-      try {
-        result = await strategy.run(prepared.prompt, {
-          noReplanner: options.noReplanner,
-        });
-        after = await readDatabaseState();
-      } catch (error) {
-        failed = true;
-        runFailure = error;
-      }
-
-      let cleanupFailure: unknown;
-      let cleanupFailed = false;
-      try {
-        await cleanupRunIncidents(before, prepared.runPrefix);
-      } catch (error) {
-        cleanupFailed = true;
-        cleanupFailure = error;
-      }
-
-      if (failed && cleanupFailed) {
-        throw new AggregateError(
-          [runFailure, cleanupFailure],
-          `Scenario ${scenario} failed and its benchmark incidents could not be cleaned up`,
-        );
-      }
-      if (failed) throw runFailure;
-      if (cleanupFailed) throw cleanupFailure;
-      if (!result || !after) {
-        throw new Error(`Scenario ${scenario} completed without a result`);
-      }
+      const result: ReasoningResult = await strategy.run(prepared.prompt, {
+        noReplanner: options.noReplanner,
+      });
+      const after = await readDatabaseState(store);
       results.push({
         scenario,
         strategy: name,
@@ -549,6 +513,9 @@ export async function runBenchmarks(
         llmCalls: result.metrics.calls,
         latencyMs: result.metrics.latencyMs,
       });
+      } finally {
+        store.close();
+      }
     }
   }
 
@@ -557,13 +524,9 @@ export async function runBenchmarks(
 
 async function main(): Promise<void> {
   const options = parseBenchArguments(process.argv.slice(2));
-  try {
-    const results = await runBenchmarks(options);
-    process.stdout.write(`${formatBenchResults(results)}\n`);
-    if (results.some(({ accuracy }) => !accuracy)) process.exitCode = 1;
-  } finally {
-    await closeDatabase();
-  }
+  const results = await runBenchmarks(options);
+  process.stdout.write(`${formatBenchResults(results)}\n`);
+  if (results.some(({ accuracy }) => !accuracy)) process.exitCode = 1;
 }
 
 if (

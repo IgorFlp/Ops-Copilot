@@ -1,143 +1,111 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AlertRecord } from "../src/agents/types.js";
-import { alertPersistenceValues, seedOperationalData } from "./seed.js";
+import { SqliteOpsStore } from "../src/store/sqlite-ops-store.js";
+import { seedOperationalData } from "./seed.js";
 
-test("alert seed persistence omits the service reference attribute", () => {
-  const values = alertPersistenceValues({
-    fixtureKey: "opspilot-seed-payments-latency",
-    service: "payments-api",
-    serviceId: 10,
-    title: "Payment latency",
-    description: "Latency is above threshold.",
-    status: "firing",
-    severity: "critical",
-  });
+test("seed is idempotent and preserves unrelated operational records", async () => {
+  const store = new SqliteOpsStore(".memory");
+  try {
+    const unrelated = await store.upsertService({
+      slug: "unrelated-service",
+      name: "Unrelated Service",
+      description: "Must remain after seeding.",
+      tier: "tier-3",
+    });
+    await store.upsertAlert({
+      fixtureKey: "unrelated-alert",
+      service: "unrelated-service",
+      title: "Unrelated alert",
+      description: "Must remain after seeding.",
+      status: "firing",
+      severity: "low",
+    });
 
-  assert.deepEqual(values, {
-    fixtureKey: "opspilot-seed-payments-latency",
-    serviceId: 10,
-    title: "Payment latency",
-    description: "Latency is above threshold.",
-    status: "firing",
-    severity: "critical",
-  });
-  assert.equal("service" in values, false);
-});
+    await seedOperationalData(store);
+    const firstSeed = {
+      services: await store.listServices(),
+      alerts: await store.listAlerts("all"),
+      runbooks: [
+        await store.getRunbook("checkout"),
+        await store.getRunbook("payments"),
+        await store.getRunbook("auth"),
+      ],
+    };
 
-test("seed is idempotent and preserves unrelated services and alerts", async () => {
-  const services = new Map([
-    ["unrelated-service", { id: 90, name: "Unrelated", description: "Keep me" }],
-  ]);
-  const alerts = new Map<string, AlertRecord>([
-    [
-      "unrelated-alert",
-      {
-        id: 90,
-        fixtureKey: "unrelated-alert",
-        serviceId: 90,
-        service: "Unrelated",
-        title: "Unrelated alert",
-        description: "Keep me too",
-        status: "firing",
-        severity: "low",
-      },
-    ],
-  ]);
-  let nextServiceId = 100;
-  let nextAlertId = 100;
+    await seedOperationalData(store);
+    const secondSeed = {
+      services: await store.listServices(),
+      alerts: await store.listAlerts("all"),
+      runbooks: [
+        await store.getRunbook("checkout"),
+        await store.getRunbook("payments"),
+        await store.getRunbook("auth"),
+      ],
+    };
 
-  const store = {
-    async upsertService(service: {
-      slug: string;
-      name: string;
-      description: string;
-    }) {
-      const existing = services.get(service.slug);
-      if (existing) {
-        services.set(service.slug, { id: existing.id, ...service });
-        return { id: existing.id };
-      }
-      const created = { id: nextServiceId++, ...service };
-      services.set(service.slug, created);
-      return { id: created.id };
-    },
-    async upsertAlert(
-      alert: {
-        fixtureKey: string;
-        serviceId: number;
-        title: string;
-        description: string;
-        status: "firing" | "resolved";
-        severity: "critical" | "high" | "medium" | "low";
-      },
-    ) {
-      const service = [...services.values()].find(
-        (candidate) => candidate.id === alert.serviceId,
-      );
-      assert.ok(service);
-      const existing = alerts.get(alert.fixtureKey);
-      alerts.set(alert.fixtureKey, {
-        id: existing?.id ?? nextAlertId++,
-        fixtureKey: alert.fixtureKey,
-        serviceId: alert.serviceId,
-        service: service.name,
-        title: alert.title,
-        description: alert.description,
-        status: alert.status,
-        severity: alert.severity,
-      });
-    },
-  };
-
-  await seedOperationalData(store);
-  const firstSnapshot = JSON.stringify([
-    [...services.entries()],
-    [...alerts.entries()],
-  ]);
-  await seedOperationalData(store);
-  const secondSnapshot = JSON.stringify([
-    [...services.entries()],
-    [...alerts.entries()],
-  ]);
-
-  assert.equal(secondSnapshot, firstSnapshot);
-  assert.equal(services.size, 6);
-  assert.equal(alerts.size, 7);
-  for (const slug of [
-    "payments-api",
-    "checkout-api",
-    "orders-api",
-    "inventory-api",
-    "catalog-api",
-  ]) {
-    assert.equal(services.has(slug), true);
+    assert.deepEqual(secondSeed, firstSeed);
+    assert.equal(firstSeed.services.length, 6);
+    assert.equal(
+      firstSeed.services.filter(({ slug }) => slug !== "unrelated-service")
+        .length,
+      5,
+    );
+    assert.deepEqual(
+      firstSeed.services
+        .filter(({ slug }) => slug !== "unrelated-service")
+        .map(({ slug }) => slug)
+        .sort(),
+      [
+        "auth-api",
+        "catalog-api",
+        "checkout-api",
+        "inventory-api",
+        "payments-api",
+      ],
+    );
+    assert.equal(firstSeed.alerts.length, 7);
+    const seededAlerts = firstSeed.alerts.filter(({ fixtureKey }) =>
+      fixtureKey.startsWith("opspilot-seed-"),
+    );
+    assert.equal(seededAlerts.length, 6);
+    assert.equal(
+      seededAlerts.filter(({ status }) => status === "firing").length,
+      3,
+    );
+    assert.equal(
+      seededAlerts.filter(({ status }) => status === "resolved").length,
+      3,
+    );
+    assert.equal(
+      seededAlerts.filter(
+        ({ status, severity }) => status === "firing" && severity === "critical",
+      ).length,
+      2,
+    );
+    assert.equal(
+      seededAlerts.filter(
+        ({ status, severity }) => status === "firing" && severity === "high",
+      ).length,
+      1,
+    );
+    assert.equal(
+      seededAlerts.filter(
+        ({ status, severity }) =>
+          status === "resolved" && severity === "medium",
+      ).length,
+      3,
+    );
+    assert.equal(firstSeed.runbooks.length, 3);
+    assert.deepEqual(
+      firstSeed.runbooks.map(({ service }) => service).sort(),
+      ["Auth API", "Checkout API", "Payments API"],
+    );
+    assert.equal(firstSeed.services.some(({ id }) => id === unrelated.id), true);
+    assert.equal(
+      firstSeed.alerts.some(({ fixtureKey }) => fixtureKey === "unrelated-alert"),
+      true,
+    );
+  } finally {
+    store.close();
   }
-  assert.equal(
-    [...alerts.values()].filter((alert) => alert.fixtureKey.startsWith("opspilot-seed") && alert.status === "firing").length,
-    3,
-  );
-  assert.equal(
-    [...alerts.values()].filter((alert) => alert.fixtureKey.startsWith("opspilot-seed") && alert.status === "resolved").length,
-    3,
-  );
-  assert.equal(
-    alerts.get("opspilot-seed-payments-latency")?.severity,
-    "critical",
-  );
-  assert.equal(
-    alerts.get("opspilot-seed-checkout-errors")?.severity,
-    "critical",
-  );
-  assert.equal(alerts.get("opspilot-seed-orders-queue")?.severity, "high");
-  assert.deepEqual(
-    [
-      alerts.get("opspilot-seed-inventory-recovered")?.severity,
-      alerts.get("opspilot-seed-notifications-recovered")?.severity,
-      alerts.get("opspilot-seed-payments-recovered")?.severity,
-    ],
-    ["medium", "medium", "medium"],
-  );
-  assert.equal(services.has("unrelated-service"), true);
-  assert.equal(alerts.has("unrelated-alert"), true);
 });

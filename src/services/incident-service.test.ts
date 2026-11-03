@@ -64,6 +64,8 @@ function createMemoryStore(): IncidentServiceStore {
         title: input.title,
         severity: input.severity,
         status: "open",
+        summary: input.summary ?? null,
+        resolvedAt: null,
       };
       incidents.push(incident);
       return { ...incident };
@@ -75,7 +77,25 @@ function createMemoryStore(): IncidentServiceStore {
         throw new DomainError("Incident is already resolved", "CONFLICT");
       }
       incident.status = "resolved";
+      incident.resolvedAt = new Date().toISOString();
       return { ...incident };
+    },
+    async listIncidents(status) {
+      return incidents.filter(
+        (incident) => status === "all" || incident.status === status,
+      );
+    },
+    async getRunbook(service) {
+      if (service !== "payments") {
+        throw new DomainError("Runbook not found", "NOT_FOUND");
+      }
+      return {
+        id: 1,
+        serviceId: 1,
+        service: "Payments",
+        title: "Payments runbook",
+        content: "Check payment gateway health.",
+      };
     },
   };
 }
@@ -102,14 +122,44 @@ test("opens and resolves an incident and rejects a second resolution", async () 
     severity: "high",
   });
   assert.equal(opened.status, "open");
+  assert.equal(opened.summary, null);
+  assert.equal(opened.resolvedAt, null);
 
   const resolved = await service.resolveIncident(opened.id);
   assert.equal(resolved.status, "resolved");
+  assert.ok(resolved.resolvedAt);
   await assert.rejects(
     service.resolveIncident(opened.id),
     (error: unknown) =>
       error instanceof DomainError && error.code === "CONFLICT",
   );
+});
+
+test("lists incidents with an open default and retrieves service runbooks", async () => {
+  const service = createIncidentService(createMemoryStore());
+  const open = await service.openIncident({
+    title: "Payment delay",
+    service: "payments",
+    severity: "high",
+  });
+  const resolved = await service.openIncident({
+    title: "Previous delay",
+    service: "payments",
+    severity: "medium",
+  });
+  await service.resolveIncident(resolved.id);
+
+  assert.deepEqual(
+    (await service.listIncidents()).map(({ id }) => id),
+    [open.id],
+  );
+  assert.deepEqual(
+    (await service.listIncidents("resolved")).map(({ id }) => id),
+    [resolved.id],
+  );
+  assert.equal((await service.listIncidents("all")).length, 2);
+  assert.equal((await service.getRunbook("payments")).title, "Payments runbook");
+  await assert.rejects(service.getRunbook(" "));
 });
 
 test("validates incident title and identifier and rejects unknown service", async () => {
