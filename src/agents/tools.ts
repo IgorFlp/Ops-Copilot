@@ -10,14 +10,11 @@ import { ReflectionAction } from "./types.js";
 import { getDefaultOpsStore } from "../store/default-ops-store.js";
 import { isMutationAuthorized } from "./mutation-policy.js";
 import { fetchProviderStatus } from "./provider-status.js";
-
-const alertStatusSchema = z.enum(["firing", "resolved", "all"]).default("firing");
-const incidentStatusSchema = z
-  .enum(["open", "resolved", "all"])
-  .default("open")
-  .describe(
-    "Incident status to list: open, resolved, or all. Defaults to open. Read-only; does not change incident state.",
-  );
+import {
+  listAlertsInputSchema,
+  listIncidentsInputSchema,
+  resolveIncidentInputSchema,
+} from "./tool-schemas.js";
 const severityValues = ["critical", "high", "medium", "low"] as const;
 const severityEnum = z.enum(severityValues);
 const severitySchema = z
@@ -42,11 +39,6 @@ const severitySchema = z
   .describe(
     "Severity: critical, high, medium, or low. Incident levels SEV-1 through SEV-4 map to critical, high, medium, and low respectively.",
   );
-const listAlertsInputSchema = z.object({
-  status: alertStatusSchema.describe(
-    "Alert status to list: firing, resolved, or all. Defaults to firing. Read-only; does not change alert state.",
-  ),
-});
 const openIncidentInputSchema = z.object({
   title: z
     .string()
@@ -72,16 +64,6 @@ const openIncidentInputSchema = z.object({
     .describe(
       "Optional incident summary of up to 4000 characters; omit or pass null when no summary is available.",
     ),
-});
-const resolveIncidentInputSchema = z.object({
-  id: z
-    .number()
-    .int()
-    .positive()
-    .describe("Positive numeric identifier of an existing open incident."),
-});
-const listIncidentsInputSchema = z.object({
-  status: incidentStatusSchema,
 });
 const runbookInputSchema = z.object({
   service: z
