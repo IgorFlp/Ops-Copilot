@@ -29,12 +29,12 @@ and successful results contain the indicator and description on one line.
 
 ### Tests for User Story 1
 
-- [ ] T001 [US1] Add fake-fetch success tests for GitHub, Cloudflare, the GitHub default, and one-line status output in `src/agents/provider-status.test.ts`
+- [X] T001 [US1] Add fake-fetch success tests for GitHub, Cloudflare, the GitHub default, and one-line status output in `src/agents/provider-status.test.ts`
 
 ### Implementation for User Story 1
 
-- [ ] T002 [US1] Create a fetch-injectable status checker with the GitHub and Cloudflare endpoint mapping, status-response Zod validation, compact success output, and readable failure result in `src/agents/provider-status.ts`
-- [ ] T003 [US1] Register `check_provider_status` with a documented `provider` enum/default and incident-triage usage description; include it in tool creation, exports, and `invokeOpsTool` dispatch in `src/agents/tools.ts`, and cover tool behavior in `src/agents/tools.test.ts`
+- [X] T002 [US1] Create a fetch-injectable status checker with the GitHub and Cloudflare endpoint mapping, status-response Zod validation, compact success output, and readable failure result in `src/agents/provider-status.ts`
+- [X] T003 [US1] Register `check_provider_status` with a documented `provider` enum/default and incident-triage usage description; include it in tool creation, exports, and `invokeOpsTool` dispatch in `src/agents/tools.ts`, and cover tool behavior in `src/agents/tools.test.ts`
 
 **Checkpoint**: US1 can be demonstrated independently using fake provider
 responses, and the tool's omitted provider selects GitHub.
@@ -51,12 +51,12 @@ readable final error string rather than an exception.
 
 ### Tests for User Story 2
 
-- [ ] T004 [US2] Add fake-fetch tests for per-attempt timeout, a single retry after timeout/network failure/5xx, no retry for invalid status data or non-5xx responses, and readable final failures in `src/agents/provider-status.test.ts`
+- [X] T004 [US2] Add fake-fetch tests for per-attempt timeout, a single retry after timeout/network failure/5xx, no retry for invalid status data or non-5xx responses, and readable final failures in `src/agents/provider-status.test.ts`
 
 ### Implementation for User Story 2
 
-- [ ] T005 [US2] Apply a five-second timeout to each fetch attempt and enforce exactly one retry for timeout, network failure, or 5xx while returning concise error strings for final failures in `src/agents/provider-status.ts`
-- [ ] T006 [US2] Verify that `check_provider_status` exposes success and failure observations as tool results without throwing and that invalid provider arguments are rejected by the tool schema in `src/agents/tools.test.ts`
+- [X] T005 [US2] Apply a five-second timeout to each fetch attempt and enforce exactly one retry for timeout, network failure, or 5xx while returning concise error strings for final failures in `src/agents/provider-status.ts`
+- [X] T006 [US2] Verify that `check_provider_status` exposes success and failure observations as tool results without throwing and that invalid provider arguments are rejected by the tool schema in `src/agents/tools.test.ts`
 
 **Checkpoint**: US2 passes offline tests for retry limits, validation, and
 failure-result behavior.
@@ -65,7 +65,7 @@ failure-result behavior.
 
 **Purpose**: Validate type safety and preserve existing agent-tool behavior.
 
-- [ ] T007 Run the provider-status and existing tool tests with `node --import tsx --test src/agents/provider-status.test.ts src/agents/tools.test.ts`, then run `npm run typecheck` and `npm test`; resolve any regressions in `src/agents/provider-status.ts`, `src/agents/provider-status.test.ts`, `src/agents/tools.ts`, or `src/agents/tools.test.ts`
+- [X] T007 Run the provider-status and existing tool tests with `node --import tsx --test src/agents/provider-status.test.ts src/agents/tools.test.ts`, then run `npm run typecheck` and `npm test`; resolve any regressions in `src/agents/provider-status.ts`, `src/agents/provider-status.test.ts`, `src/agents/tools.ts`, or `src/agents/tools.test.ts`
 
 ## Dependencies & Execution Order
 

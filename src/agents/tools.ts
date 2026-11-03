@@ -9,6 +9,7 @@ import type {
 import { ReflectionAction } from "./types.js";
 import { getDefaultOpsStore } from "../store/default-ops-store.js";
 import { isMutationAuthorized } from "./mutation-policy.js";
+import { fetchProviderStatus } from "./provider-status.js";
 
 const alertStatusSchema = z.enum(["firing", "resolved", "all"]).default("firing");
 const incidentStatusSchema = z
@@ -92,6 +93,14 @@ const runbookInputSchema = z.object({
       "Non-empty service slug, service name, or unambiguous service reference whose runbook should be read.",
     ),
 });
+const providerStatusInputSchema = z.object({
+  provider: z
+    .enum(["github", "cloudflare"])
+    .default("github")
+    .describe(
+      "External provider whose public status to check: github or cloudflare. Defaults to github. Use when an external dependency may be unavailable and you need to distinguish a provider incident from an internal issue. Read-only; does not change incident state.",
+    ),
+});
 
 function stableValue(value: unknown): string {
   if (Array.isArray(value)) {
@@ -154,6 +163,7 @@ export function priorMutationObservation(
 export function createOpsTools(
   store?: IncidentServiceStore,
   completedActions: ReflectionAction[] = [],
+  doFetch: typeof fetch = fetch,
 ) {
   const service = () =>
     createIncidentService(store ?? getDefaultOpsStore());
@@ -236,12 +246,23 @@ export function createOpsTools(
     },
   );
 
+  const checkProviderStatus = tool(
+    async ({ provider }) => fetchProviderStatus(provider, doFetch),
+    {
+      name: "check_provider_status",
+      description:
+        "Check GitHub or Cloudflare's public status during a suspected external dependency issue, such as when determining whether the problem is internal or on the provider's side. Input provider is github or cloudflare and defaults to github. This is read-only and returns a compact status observation or a readable limitation.",
+      schema: providerStatusInputSchema,
+    },
+  );
+
   return [
     listAlerts,
     openIncident,
     resolveIncident,
     listIncidents,
     consultRunbook,
+    checkProviderStatus,
   ] as const;
 }
 
@@ -249,8 +270,9 @@ export function createOpsToolsForRequest(
   input: string,
   store?: IncidentServiceStore,
   completedActions: ReflectionAction[] = [],
+  doFetch: typeof fetch = fetch,
 ) {
-  return createOpsTools(store, completedActions).filter(({ name }) => {
+  return createOpsTools(store, completedActions, doFetch).filter(({ name }) => {
     if (name === "open_incidente") {
       return isMutationAuthorized(input, "open_incidente");
     }
@@ -268,6 +290,7 @@ export const [
   resolveIncident,
   listIncidents,
   consultRunbook,
+  checkProviderStatus,
 ] = opsTools;
 
 export function normalizeToolArguments(
@@ -300,8 +323,10 @@ export function invokeOpsTool(
   name: string,
   args: Record<string, unknown>,
   store?: IncidentServiceStore,
+  doFetch: typeof fetch = fetch,
 ): Promise<unknown> {
-  const [alerts, open, resolve, incidents, runbook] = createOpsTools(store);
+  const [alerts, open, resolve, incidents, runbook, providerStatus] =
+    createOpsTools(store, [], doFetch);
   switch (name) {
     case "list_alerts":
       return alerts.invoke(listAlertsInputSchema.parse(args));
@@ -315,6 +340,8 @@ export function invokeOpsTool(
       return incidents.invoke(listIncidentsInputSchema.parse(args));
     case "consultar_runbook":
       return runbook.invoke(runbookInputSchema.parse(args));
+    case "check_provider_status":
+      return providerStatus.invoke(providerStatusInputSchema.parse(args));
     default:
       throw new Error(`Unknown operational tool: ${name}`);
   }

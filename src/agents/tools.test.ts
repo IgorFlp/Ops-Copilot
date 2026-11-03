@@ -10,6 +10,7 @@ import type { AlertRecord, IncidentRecord, ReflectionAction } from "./types.js";
 import {
   createOpsTools,
   createOpsToolsForRequest,
+  invokeOpsTool,
   normalizeToolArguments,
   priorMutationObservation,
 } from "./tools.js";
@@ -153,6 +154,7 @@ test("tools expose expected names, defaults, and serialized service results", as
       "resolve_incidente",
       "List_incidentes",
       "consultar_runbook",
+      "check_provider_status",
     ],
   );
   for (const operationalTool of tools) {
@@ -189,6 +191,61 @@ test("tools expose expected names, defaults, and serialized service results", as
     "incidents:open",
     "runbook:payments",
   ]);
+});
+
+test("provider status tool defaults to GitHub and accepts both providers", async () => {
+  const requests: string[] = [];
+  const tools = createOpsTools(undefined, [], async (input) => {
+    requests.push(String(input));
+    return new Response(
+      JSON.stringify({
+        status: { indicator: "none", description: "All Systems Operational" },
+      }),
+      { status: 200 },
+    );
+  });
+
+  assert.equal(await tools[5].invoke({}), "github está none — All Systems Operational");
+  assert.equal(
+    await tools[5].invoke({ provider: "cloudflare" }),
+    "cloudflare está none — All Systems Operational",
+  );
+  assert.deepEqual(requests, [
+    "https://www.githubstatus.com/api/v2/status.json",
+    "https://www.cloudflarestatus.com/api/v2/status.json",
+  ]);
+  assert.match(tools[5].description, /external dependency issue/i);
+  assert.match(
+    String(tools[5].schema.shape.provider.description),
+    /defaults to github/i,
+  );
+});
+
+test("provider status tool returns failures as observations and dispatch validates provider", async () => {
+  let calls = 0;
+  const failFetch: typeof fetch = async () => {
+    calls += 1;
+    throw new TypeError("fetch failed");
+  };
+  const result = await invokeOpsTool(
+    "check_provider_status",
+    {},
+    undefined,
+    failFetch,
+  );
+
+  assert.equal(calls, 2);
+  assert.match(String(result), /Não consegui consultar o status de github/);
+  assert.throws(
+    () =>
+      invokeOpsTool(
+      "check_provider_status",
+      { provider: "aws" },
+      undefined,
+      failFetch,
+      ),
+  );
+  assert.equal(calls, 2);
 });
 
 test("maps SEV-1 through SEV-4 to supported incident severities", async () => {
