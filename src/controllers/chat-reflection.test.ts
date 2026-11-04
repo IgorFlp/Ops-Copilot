@@ -3,10 +3,14 @@ import express from "express";
 import { once } from "node:events";
 import test from "node:test";
 import type { AddressInfo } from "node:net";
-import type { ReasoningStrategy } from "../agents/types.js";
+import {
+  formatStrategyInput,
+  type ReasoningStrategy,
+} from "../agents/types.js";
 import { createStrategyRegistry } from "../agent/index.js";
 import { errorHandler } from "../middleware/error-handler.js";
 import { createChatRouter } from "../routes/chat-routes.js";
+import { FakeConversationStore } from "./chat-test-helpers.js";
 
 async function withChatServer(
   registry: ReturnType<typeof createStrategyRegistry>,
@@ -14,7 +18,10 @@ async function withChatServer(
 ): Promise<void> {
   const app = express();
   app.use(express.json());
-  app.use(createChatRouter(registry));
+  app.use(createChatRouter(registry, {
+    conversationStore: new FakeConversationStore(),
+    historyMessagesThreshold: 12,
+  }));
   app.use(errorHandler);
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -34,7 +41,7 @@ test("reflect true decorates only the selected strategy and returns its result",
   const makeStrategy = (name: string): ReasoningStrategy => ({
     name,
     async run(input) {
-      invoked.push(`${name}:${input}`);
+      invoked.push(`${name}:${formatStrategyInput(input)}`);
       return {
         answer: `${name} answer`,
         trace: [{ type: "answer", content: `${name} answer` }],
@@ -85,11 +92,12 @@ test("reflect true decorates only the selected strategy and returns its result",
         { type: "answer", content: "plan-and-execute answer" },
         { type: "critique", content: "Reviewed", approved: true },
       ],
-      metrics: { calls: 3, latencyMs: 4 },
+      metrics: { calls: 3, latencyMs: 4, historyMessages: 0 },
+      conversationId: "conversation-1",
     });
   });
   assert.deepEqual(decorated, ["plan-and-execute"]);
-  assert.deepEqual(invoked, ["plan-and-execute:Investigate"]);
+  assert.deepEqual(invoked, ["plan-and-execute:User: Investigate"]);
 });
 
 test("omitted and false reflect do not apply the reflection decorator", async () => {

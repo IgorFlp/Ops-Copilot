@@ -7,8 +7,10 @@ import {
   ReasoningResult,
   ReasoningStrategy,
   ReflectionContext,
+  StrategyInput,
   StrategyRunOptions,
   TraceEvent,
+  formatStrategyInput,
 } from "./types.js";
 import { createOpsToolsForRequest } from "./tools.js";
 
@@ -21,6 +23,7 @@ type ReactAgentInvoker = (
   maxIterations: number,
   reflectionContext?: ReflectionContext,
   store?: IncidentServiceStore,
+  authorizationInput?: string,
 ) => Promise<ReactAgentOutput>;
 
 async function invokeAgent(
@@ -28,6 +31,7 @@ async function invokeAgent(
   maxIterations: number,
   reflectionContext?: ReflectionContext,
   store?: IncidentServiceStore,
+  authorizationInput = input,
 ): Promise<ReactAgentOutput> {
   const retryContext = reflectionContext
     ? [
@@ -42,7 +46,7 @@ async function invokeAgent(
     llm: createModel(),
     tools: [
       ...createOpsToolsForRequest(
-        input,
+        authorizationInput,
         store,
         reflectionContext?.completedActions,
       ),
@@ -124,10 +128,11 @@ export function createReactStrategy(
   return {
     name: "react",
     async run(
-      input,
+      input: StrategyInput,
       options: StrategyRunOptions = {},
     ): Promise<ReasoningResult> {
-      if (!input.trim()) {
+      const prompt = formatStrategyInput(input);
+      if (!prompt.trim()) {
         throw new DomainError("Input is required", "VALIDATION");
       }
       const maxIterations = options.maxIterations ?? DEFAULT_MAX_ITERATIONS;
@@ -144,10 +149,11 @@ export function createReactStrategy(
 
       const started = Date.now();
       const { messages } = await invoker(
-        input,
+        prompt,
         maxIterations,
         options.reflectionContext,
         store,
+        typeof input === "string" ? input : input.message,
       );
       const answer = [...messages]
         .reverse()

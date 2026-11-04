@@ -39,6 +39,26 @@ export interface ReasoningResult {
   metrics: ReasoningMetrics;
 }
 
+export interface StrategyHistoryMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface ChatStrategyInput {
+  message: string;
+  history: StrategyHistoryMessage[];
+}
+
+export type StrategyInput = string | ChatStrategyInput;
+
+export function formatStrategyInput(input: StrategyInput): string {
+  if (typeof input === "string") return input;
+  const history = input.history.map(({ role, content }) =>
+    `${role === "user" ? "User" : "Assistant"}: ${content}`,
+  );
+  return [...history, `User: ${input.message}`].join("\n\n");
+}
+
 export interface StrategyRunOptions {
   maxIterations?: number;
   maxReflection?: number;
@@ -60,7 +80,7 @@ export interface ReflectionContext {
 
 export interface ReasoningStrategy {
   name: string;
-  run(input: string, options?: StrategyRunOptions): Promise<ReasoningResult>;
+  run(input: StrategyInput, options?: StrategyRunOptions): Promise<ReasoningResult>;
 }
 
 export type { AlertSeverity, AlertStatus, IncidentSeverity, IncidentStatus };

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ReasoningStrategy } from "../agents/types.js";
+import {
+  formatStrategyInput,
+  ReasoningStrategy,
+} from "../agents/types.js";
 import { DomainError } from "../errors/domain-error.js";
 import { createArenaService, strategies } from "./arena-service.js";
 
@@ -21,7 +24,7 @@ test("runs selected strategies against the same input with the same limit", asyn
   const strategy = (name: string): ReasoningStrategy => ({
     name,
     async run(input, options) {
-      received.push([input, options?.maxIterations]);
+      received.push([formatStrategyInput(input), options?.maxIterations]);
       return {
         answer: `${name} answer`,
         trace: [{ type: "answer", content: `${name} answer` }],
@@ -53,7 +56,7 @@ test("passes reflection bounds to explicitly selected reflected strategies", asy
   const makeStrategy = (name: string): ReasoningStrategy => ({
     name,
     async run(input, options) {
-      received.push([input, options?.maxReflection]);
+      received.push([formatStrategyInput(input), options?.maxReflection]);
       return {
         answer: name,
         trace: [{ type: "answer", content: name }],

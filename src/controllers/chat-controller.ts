@@ -3,12 +3,18 @@ import { z } from "zod";
 import { strategyRegistry } from "../agent/index.js";
 import type { StrategyRegistry } from "../agent/index.js";
 import { DomainError } from "../errors/domain-error.js";
+import { createChatService } from "../services/chat-service.js";
+import type { ChatService } from "../services/chat-service.js";
+import { getDefaultConversationStore } from "../store/default-conversation-store.js";
+import type { ConversationStore } from "../store/conversation-store.js";
 
 const DEFAULT_CHAT_TIMEOUT_MS = 180_000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 export interface ChatControllerOptions {
   timeoutMs?: number;
+  conversationStore?: ConversationStore;
+  historyMessagesThreshold?: number;
 }
 
 const chatRequestSchema = z
@@ -16,6 +22,7 @@ const chatRequestSchema = z
     message: z.string().trim().min(1),
     strategy: z.string().trim().min(1).default("react"),
     reflect: z.boolean().default(false),
+    conversationId: z.string().trim().min(1).optional(),
   })
   .strict();
 
@@ -57,19 +64,32 @@ export function createChatController(
       `timeoutMs must be an integer between 1 and ${MAX_TIMER_DELAY_MS}`,
     );
   }
+  let chatService: ChatService | undefined;
+  const getChatService = (): ChatService => {
+    chatService ??= createChatService(
+      options.conversationStore ?? getDefaultConversationStore(),
+      registry,
+      { historyMessagesThreshold: options.historyMessagesThreshold },
+    );
+    return chatService;
+  };
 
   return async (req, res, next) => {
     try {
       const body = parseChatRequest(req.body);
-      const selected = registry.resolve(body.strategy, body.reflect);
       let result;
       try {
         result = await runWithDeadline(
-          selected.strategy.run(body.message),
+          getChatService().runChat(body),
           timeoutMs,
         );
       } catch (error) {
-        if (error instanceof DomainError && error.code === "TIMEOUT") {
+        if (
+          error instanceof DomainError &&
+          ["TIMEOUT", "NOT_FOUND", "UNSUPPORTED_STRATEGY", "CONFIGURATION"].includes(
+            error.code,
+          )
+        ) {
           throw error;
         }
         throw new DomainError("Chat execution failed", "INTERNAL");

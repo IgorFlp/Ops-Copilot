@@ -18,8 +18,10 @@ import {
   ReasoningResult,
   ReasoningStrategy,
   ReflectionContext,
+  StrategyInput,
   StrategyRunOptions,
   TraceEvent,
+  formatStrategyInput,
 } from "./types.js";
 import { priorMutationObservation } from "./tools.js";
 
@@ -744,6 +746,7 @@ const modelDependencies: PlanExecutionDependencies = {
 
 const PlanState = Annotation.Root({
   input: Annotation<string>(),
+  request: Annotation<string>(),
   plan: Annotation<PlanStep[]>({
     reducer: (_current, update) => update,
     default: () => [],
@@ -776,8 +779,14 @@ export function createPlanAndExecuteStrategy(
 ): ReasoningStrategy {
   return {
     name: "plan-and-execute",
-    async run(input, options: StrategyRunOptions = {}): Promise<ReasoningResult> {
-      if (!input.trim()) {
+    async run(
+      input: StrategyInput,
+      options: StrategyRunOptions = {},
+    ): Promise<ReasoningResult> {
+      const prompt = formatStrategyInput(input);
+      const request =
+        typeof input === "string" ? input : input.message;
+      if (!prompt.trim()) {
         throw new DomainError("Input is required", "VALIDATION");
       }
       const maxIterations = options.maxIterations ?? DEFAULT_MAX_ITERATIONS;
@@ -800,7 +809,7 @@ export function createPlanAndExecuteStrategy(
             options.reflectionContext,
           );
           const plan = result.steps.slice(0, MAX_STEPS);
-          if (plan.length === 0 && hasOperationalIntent(state.input)) {
+          if (plan.length === 0 && hasOperationalIntent(state.request)) {
             throw new Error(
               "Planner returned an empty plan for an explicit operational request.",
             );
@@ -827,7 +836,7 @@ export function createPlanAndExecuteStrategy(
             execution = await dependencies.execute(
               step,
               state.done,
-              state.input,
+              state.request,
               options.reflectionContext,
               store,
             );
@@ -932,7 +941,7 @@ export function createPlanAndExecuteStrategy(
         .compile();
 
       const result = await graph.invoke(
-        { input },
+        { input: prompt, request },
         { recursionLimit: maxIterations * 3 + 2 },
       );
       const answer =

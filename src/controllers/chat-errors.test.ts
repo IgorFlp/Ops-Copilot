@@ -7,6 +7,7 @@ import type { ReasoningStrategy } from "../agents/types.js";
 import { createStrategyRegistry } from "../agent/index.js";
 import { errorHandler } from "../middleware/error-handler.js";
 import { createChatRouter } from "../routes/chat-routes.js";
+import { FakeConversationStore } from "./chat-test-helpers.js";
 
 async function withChatServer(
   registry: ReturnType<typeof createStrategyRegistry>,
@@ -15,7 +16,11 @@ async function withChatServer(
 ): Promise<void> {
   const app = express();
   app.use(express.json());
-  app.use(createChatRouter(registry, options));
+  app.use(createChatRouter(registry, {
+    ...options,
+    conversationStore: new FakeConversationStore(),
+    historyMessagesThreshold: 12,
+  }));
   app.use(errorHandler);
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -79,6 +84,8 @@ test("invalid chat bodies return 400 with field issues before strategy execution
       {},
       { message: "  " },
       { message: 42 },
+      { message: "Check", conversationId: "" },
+      { message: "Check", conversationId: 42 },
       { message: "Check", reflect: "true" },
       { message: "Check", extra: true },
       [],

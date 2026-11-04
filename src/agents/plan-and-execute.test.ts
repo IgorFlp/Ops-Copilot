@@ -691,3 +691,37 @@ test("passes reflection context to planning and execution on retries", async () 
   assert.deepEqual(receivedPlanContext, context);
   assert.deepEqual(receivedExecuteContext, context);
 });
+
+test("plan strategy receives structured history but restricts mutation authorization to the current request", async () => {
+  let plannerInput = "";
+  let executorInput = "";
+  const strategy = createPlanAndExecuteStrategy({
+    async plan(input) {
+      plannerInput = input;
+      return { steps: ["Inspect current alerts"], answer: "" };
+    },
+    async execute(_step, _done, input) {
+      executorInput = input;
+      return { observation: "No new alerts." };
+    },
+    async replan() {
+      return {
+        decision: "finish",
+        remainingSteps: [],
+        critique: "Inspection complete.",
+        answer: "No new alerts.",
+      };
+    },
+  });
+
+  await strategy.run({
+    message: "Check current alerts",
+    history: [{ role: "user", content: "Open an incident" }],
+  });
+
+  assert.equal(
+    plannerInput,
+    "User: Open an incident\n\nUser: Check current alerts",
+  );
+  assert.equal(executorInput, "Check current alerts");
+});

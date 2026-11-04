@@ -6,8 +6,10 @@ import {
   ReasoningStrategy,
   ReflectionAction,
   ReflectionContext,
+  StrategyInput,
   StrategyRunOptions,
   TraceEvent,
+  formatStrategyInput,
 } from "./types.js";
 
 const DEFAULT_MAX_REFLECTION = 2;
@@ -158,7 +160,7 @@ export function withReflection(
       ? strategy.name
       : `reflect:${strategy.name}`,
     async run(
-      input: string,
+      input: StrategyInput,
       runOptions: StrategyRunOptions = {},
     ): Promise<ReasoningResult> {
       const maxReflection =
@@ -169,6 +171,7 @@ export function withReflection(
 
       const started = Date.now();
       const critic = options.critic ?? critique;
+      const critiqueInput = formatStrategyInput(input);
       const reflectionContext: ReflectionContext = {
         feedback: [...(runOptions.reflectionContext?.feedback ?? [])],
         observations: [
@@ -208,7 +211,7 @@ export function withReflection(
           ...current,
           trace: [...trace],
         };
-        const verdict = parseVerdict(await critic(input, candidate));
+        const verdict = parseVerdict(await critic(critiqueInput, candidate));
         calls += 1;
         trace.push({
           type: "critique",

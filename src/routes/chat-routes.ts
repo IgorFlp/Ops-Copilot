@@ -5,10 +5,15 @@ import {
   createChatController,
   type ChatControllerOptions,
 } from "../controllers/chat-controller.js";
+import type { ConversationStore } from "../store/conversation-store.js";
+
+export interface ChatRouterOptions extends ChatControllerOptions {
+  conversationStore?: ConversationStore;
+}
 
 export function createChatRouter(
   registry: StrategyRegistry = strategyRegistry,
-  options: ChatControllerOptions = {},
+  options: ChatRouterOptions = {},
 ): Router {
   const router = Router();
   router.post("/chat", createChatController(registry, options));

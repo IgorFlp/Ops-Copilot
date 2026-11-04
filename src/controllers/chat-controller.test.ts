@@ -3,10 +3,14 @@ import express from "express";
 import { once } from "node:events";
 import test from "node:test";
 import type { AddressInfo } from "node:net";
-import type { ReasoningStrategy } from "../agents/types.js";
+import {
+  formatStrategyInput,
+  type ReasoningStrategy,
+} from "../agents/types.js";
 import { createStrategyRegistry } from "../agent/index.js";
 import { errorHandler } from "../middleware/error-handler.js";
 import { createChatRouter } from "../routes/chat-routes.js";
+import { FakeConversationStore } from "./chat-test-helpers.js";
 
 function fakeStrategy(
   name: string,
@@ -15,7 +19,7 @@ function fakeStrategy(
   return {
     name,
     async run(message) {
-      received.push(`${name}:${message}`);
+      received.push(`${name}:${formatStrategyInput(message)}`);
       return {
         answer: `${name} answer`,
         trace: [{ type: "answer", content: `${name} answer` }],
@@ -51,7 +55,11 @@ test("HTTP chat defaults to react and returns the unwrapped reasoning result", a
     fakeStrategy("react", received),
     fakeStrategy("plan-and-execute", received),
   ]);
-  const router = createChatRouter(registry);
+  const conversations = new FakeConversationStore();
+  const router = createChatRouter(registry, {
+    conversationStore: conversations,
+    historyMessagesThreshold: 12,
+  });
 
   await withChatServer(router, async (url) => {
     const response = await fetch(url, {
@@ -61,13 +69,20 @@ test("HTTP chat defaults to react and returns the unwrapped reasoning result", a
     });
 
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), {
+    const body = await response.json() as {
+      answer: string;
+      trace: Array<{ type: string; content: string }>;
+      metrics: { calls: number; latencyMs: number; historyMessages: number };
+      conversationId: string;
+    };
+    assert.deepEqual(body, {
       answer: "react answer",
       trace: [{ type: "answer", content: "react answer" }],
-      metrics: { calls: 2, latencyMs: 5 },
+      metrics: { calls: 2, latencyMs: 5, historyMessages: 0 },
+      conversationId: "conversation-1",
     });
   });
-  assert.deepEqual(received, ["react:Check alerts"]);
+  assert.deepEqual(received, ["react:User: Check alerts"]);
 });
 
 test("HTTP chat selects an explicitly requested registered strategy", async () => {
@@ -76,7 +91,11 @@ test("HTTP chat selects an explicitly requested registered strategy", async () =
     fakeStrategy("react", received),
     fakeStrategy("plan-and-execute", received),
   ]);
-  const router = createChatRouter(registry);
+  const conversations = new FakeConversationStore();
+  const router = createChatRouter(registry, {
+    conversationStore: conversations,
+    historyMessagesThreshold: 12,
+  });
 
   await withChatServer(router, async (url) => {
     const response = await fetch(url, {
@@ -89,11 +108,78 @@ test("HTTP chat selects an explicitly requested registered strategy", async () =
     });
 
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), {
+    const body = await response.json() as {
+      answer: string;
+      trace: Array<{ type: string; content: string }>;
+      metrics: { calls: number; latencyMs: number; historyMessages: number };
+      conversationId: string;
+    };
+    assert.deepEqual(body, {
       answer: "plan-and-execute answer",
       trace: [{ type: "answer", content: "plan-and-execute answer" }],
-      metrics: { calls: 2, latencyMs: 5 },
+      metrics: { calls: 2, latencyMs: 5, historyMessages: 0 },
+      conversationId: "conversation-1",
     });
   });
-  assert.deepEqual(received, ["plan-and-execute:Investigate checkout"]);
+  assert.deepEqual(received, ["plan-and-execute:User: Investigate checkout"]);
+});
+
+test("HTTP chat continues an existing conversation with ordered history", async () => {
+  const conversations = new FakeConversationStore();
+  const conversation = await conversations.create();
+  await conversations.append(conversation.id, "user", "Check alerts");
+  await conversations.append(conversation.id, "assistant", "One alert is firing.");
+  const received: string[] = [];
+  const registry = createStrategyRegistry([fakeStrategy("react", received)]);
+  const router = createChatRouter(registry, {
+    conversationStore: conversations,
+    historyMessagesThreshold: 12,
+  });
+
+  await withChatServer(router, async (url) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        message: "What should I do?",
+        conversationId: conversation.id,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json() as {
+      conversationId: string;
+      metrics: { historyMessages: number };
+    };
+    assert.equal(body.conversationId, conversation.id);
+    assert.equal(body.metrics.historyMessages, 2);
+  });
+  assert.deepEqual(received, [
+    "react:User: Check alerts\n\nAssistant: One alert is firing.\n\nUser: What should I do?",
+  ]);
+});
+
+test("HTTP chat rejects unknown conversation identifiers without creating replacements", async () => {
+  const conversations = new FakeConversationStore();
+  const registry = createStrategyRegistry([fakeStrategy("react", [])]);
+  const router = createChatRouter(registry, {
+    conversationStore: conversations,
+    historyMessagesThreshold: 12,
+  });
+
+  await withChatServer(router, async (url) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        message: "Follow up",
+        conversationId: "missing",
+      }),
+    });
+    assert.equal(response.status, 404);
+    assert.deepEqual(await response.json(), {
+      error: "Conversation not found: missing",
+    });
+  });
+  assert.equal(conversations.conversations.size, 0);
 });
