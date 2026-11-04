@@ -5,11 +5,17 @@ import {
   type StrategyRegistry,
 } from "../agent/index.js";
 import { DomainError } from "../errors/domain-error.js";
+import type { MemoryRecall } from "./memory-service.js";
 import type { ConversationStore } from "../store/conversation-store.js";
+import type { CorrectionPreparation } from "./learning-reflector.js";
 
 export const DEFAULT_HISTORY_MESSAGES_THRESHOLD = 12;
+const AMBIGUOUS_CORRECTION_ANSWER =
+  "I couldn't determine which saved fact this correction refers to. " +
+  "Could you clarify which fact or preference you want to update?";
 
 export interface ChatServiceInput {
+  userId: string;
   message: string;
   strategy?: string;
   reflect?: boolean;
@@ -23,6 +29,21 @@ export interface ChatServiceResult extends ReasoningResult {
 
 export interface ChatServiceOptions {
   historyMessagesThreshold?: number;
+  memoryService?: MemoryRecall;
+  learningService?: {
+    prepareCorrection?(
+      userId: string,
+      latestUserMessage: string,
+    ): Promise<CorrectionPreparation>;
+    learn(
+      userId: string,
+      latestUserMessage: string,
+      correction?: CorrectionPreparation,
+    ): Promise<void>;
+  };
+  learningTasks?: {
+    schedule(task: () => Promise<void>): void;
+  };
 }
 
 export function parseHistoryMessagesThreshold(
@@ -64,6 +85,9 @@ function resolveHistoryThreshold(
 
 export class ChatService {
   private readonly historyMessagesThreshold: number;
+  private readonly memoryService?: MemoryRecall;
+  private readonly learningService?: ChatServiceOptions["learningService"];
+  private readonly learningTasks?: ChatServiceOptions["learningTasks"];
 
   constructor(
     private readonly conversations: ConversationStore,
@@ -73,6 +97,9 @@ export class ChatService {
     this.historyMessagesThreshold = resolveHistoryThreshold(
       options.historyMessagesThreshold,
     );
+    this.memoryService = options.memoryService;
+    this.learningService = options.learningService;
+    this.learningTasks = options.learningTasks;
   }
 
   async runChat(input: ChatServiceInput): Promise<ChatServiceResult> {
@@ -90,23 +117,53 @@ export class ChatService {
       .slice(0, this.historyMessagesThreshold)
       .reverse()
       .map(({ role, content }) => ({ role, content }));
+    const memories = this.memoryService
+      ? await this.memoryService.recall(input.userId, input.message)
+      : [];
 
     await this.conversations.append(conversationId, "user", input.message);
+    const learningService = this.learningService;
+    const correction = await learningService?.prepareCorrection?.(
+      input.userId,
+      input.message,
+    );
     const strategyInput: ChatStrategyInput = {
+      userId: input.userId,
       message: input.message,
       history,
+      ...(memories.length > 0
+        ? { memoryFacts: memories.map(({ fact }) => fact) }
+        : {}),
     };
     let result: ReasoningResult;
-    try {
-      result = await selected.strategy.run(strategyInput);
-    } catch {
-      throw new DomainError("Chat execution failed", "INTERNAL");
+    if (correction?.kind === "ambiguous") {
+      result = {
+        answer: AMBIGUOUS_CORRECTION_ANSWER,
+        trace: [{ type: "answer", content: AMBIGUOUS_CORRECTION_ANSWER }],
+        metrics: { calls: 0, latencyMs: 0 },
+      };
+    } else {
+      try {
+        result = await selected.strategy.run(strategyInput);
+      } catch {
+        throw new DomainError("Chat execution failed", "INTERNAL");
+      }
     }
     await this.conversations.append(
       conversationId,
       "assistant",
       result.answer,
     );
+    const learningTasks = this.learningTasks;
+    if (
+      learningService &&
+      learningTasks &&
+      correction?.kind !== "ambiguous"
+    ) {
+      learningTasks.schedule(() =>
+        learningService.learn(input.userId, input.message, correction),
+      );
+    }
 
     return {
       ...result,

@@ -1,11 +1,14 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
+import { DomainError } from "../errors/domain-error.js";
+import { getDefaultMemoryService } from "../memory/memory-store.js";
 import {
   createIncidentService,
 } from "../services/incident-service.js";
 import type {
   IncidentServiceStore,
 } from "../services/incident-service.js";
+import type { MemoryService } from "../services/memory-service.js";
 import { ReflectionAction } from "./types.js";
 import { getDefaultOpsStore } from "../store/default-ops-store.js";
 import { isMutationAuthorized } from "./mutation-policy.js";
@@ -83,6 +86,19 @@ const providerStatusInputSchema = z.object({
       "External provider whose public status to check: github or cloudflare. Defaults to github. Use when an external dependency may be unavailable and you need to distinguish a provider incident from an internal issue. Read-only; does not change incident state.",
     ),
 });
+const forgetPreferenceInputSchema = z.object({
+  preference: z
+    .string()
+    .trim()
+    .min(1)
+    .max(500)
+    .describe("The specific saved preference the current user wants forgotten."),
+}).strict();
+
+export interface MemoryToolContext {
+  userId: string;
+  memoryService: Pick<MemoryService, "forgetPreference">;
+}
 
 function stableValue(value: unknown): string {
   if (Array.isArray(value)) {
@@ -146,6 +162,7 @@ export function createOpsTools(
   store?: IncidentServiceStore,
   completedActions: ReflectionAction[] = [],
   doFetch: typeof fetch = fetch,
+  memoryContext?: MemoryToolContext,
 ) {
   const service = () =>
     createIncidentService(store ?? getDefaultOpsStore());
@@ -238,7 +255,7 @@ export function createOpsTools(
     },
   );
 
-  return [
+  const operationalTools = [
     listAlerts,
     openIncident,
     resolveIncident,
@@ -246,6 +263,26 @@ export function createOpsTools(
     consultRunbook,
     checkProviderStatus,
   ] as const;
+  if (!memoryContext) return operationalTools;
+  if (!memoryContext.userId.trim()) {
+    throw new DomainError("userId must not be empty", "VALIDATION");
+  }
+  const forgetPreference = tool(
+    async ({ preference }) =>
+      JSON.stringify(
+        await memoryContext.memoryService.forgetPreference(
+          memoryContext.userId,
+          preference,
+        ),
+      ),
+    {
+      name: "forget_preference",
+      description:
+        "Forget one saved preference belonging to the current user. Input preference is a concise description of the specific preference. This operation is user-scoped and removes a memory only when exactly one relevant match exists; not_found and ambiguous results do not change memory.",
+      schema: forgetPreferenceInputSchema,
+    },
+  );
+  return [...operationalTools, forgetPreference] as const;
 }
 
 export function createOpsToolsForRequest(
@@ -253,8 +290,17 @@ export function createOpsToolsForRequest(
   store?: IncidentServiceStore,
   completedActions: ReflectionAction[] = [],
   doFetch: typeof fetch = fetch,
+  userId?: string,
+  memoryService?: Pick<MemoryService, "forgetPreference">,
 ) {
-  return createOpsTools(store, completedActions, doFetch).filter(({ name }) => {
+  const memoryContext =
+    userId === undefined
+      ? undefined
+      : {
+          userId,
+          memoryService: memoryService ?? getDefaultMemoryService(),
+        };
+  return createOpsTools(store, completedActions, doFetch, memoryContext).filter(({ name }) => {
     if (name === "open_incidente") {
       return isMutationAuthorized(input, "open_incidente");
     }
@@ -301,11 +347,13 @@ export function normalizeToolArguments(
   return { ...args, id };
 }
 
-export function invokeOpsTool(
+export async function invokeOpsTool(
   name: string,
   args: Record<string, unknown>,
   store?: IncidentServiceStore,
   doFetch: typeof fetch = fetch,
+  userId?: string,
+  memoryService?: Pick<MemoryService, "forgetPreference">,
 ): Promise<unknown> {
   const [alerts, open, resolve, incidents, runbook, providerStatus] =
     createOpsTools(store, [], doFetch);
@@ -324,6 +372,19 @@ export function invokeOpsTool(
       return runbook.invoke(runbookInputSchema.parse(args));
     case "check_provider_status":
       return providerStatus.invoke(providerStatusInputSchema.parse(args));
+    case "forget_preference": {
+      if (userId === undefined) {
+        throw new DomainError(
+          "forget_preference requires a request-scoped user",
+          "VALIDATION",
+        );
+      }
+      const { preference } = forgetPreferenceInputSchema.parse(args);
+      return (memoryService ?? getDefaultMemoryService()).forgetPreference(
+        userId,
+        preference,
+      );
+    }
     default:
       throw new Error(`Unknown operational tool: ${name}`);
   }

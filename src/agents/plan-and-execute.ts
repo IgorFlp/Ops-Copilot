@@ -63,6 +63,7 @@ const executionSchema = z.discriminatedUnion("kind", [
       "resolve_incidente",
       "List_incidentes",
       "consultar_runbook",
+      "forget_preference",
     ]),
     args: z.record(z.string(), z.unknown()),
   }),
@@ -532,6 +533,7 @@ export interface PlanExecutionDependencies {
     input: string,
     reflectionContext?: ReflectionContext,
     store?: IncidentServiceStore,
+    userId?: string,
   ): Promise<ExecutionOutput>;
   replan(
     input: string,
@@ -556,7 +558,7 @@ const modelDependencies: PlanExecutionDependencies = {
           "Only add an incident-opening or incident-resolution step when the user directly and explicitly requests that mutation. " +
           "Asking to create a plan, report, or recommendations is not a request to create an incident. " +
           "For incident analysis without an explicit mutation request, inspect alerts and produce recommendations without changing incident state. " +
-          "Use only operations available through list_alerts, List_incidentes, consultar_runbook, open_incidente, and resolve_incidente. " +
+          "Use only operations available through list_alerts, List_incidentes, consultar_runbook, open_incidente, resolve_incidente, and forget_preference. Use forget_preference only when the current user asks to forget a saved preference. " +
           "For an incident request, include its requested service, title, and severity in the step. " +
           "Return an empty plan only when the user asks a question that can be answered without an operational tool.",
       ],
@@ -590,13 +592,14 @@ const modelDependencies: PlanExecutionDependencies = {
       throw stageError("Planner model output", error);
     }
   },
-  async execute(step, done, input, reflectionContext, store) {
+  async execute(step, done, input, reflectionContext, store, userId) {
     const canOpenIncident = isMutationAuthorized(input, "open_incidente");
     const canResolveIncident = isMutationAuthorized(input, "resolve_incidente");
     const availableTools = [
       "list_alerts(status: firing | resolved | all)",
       "List_incidentes(status: open | resolved | all)",
       "consultar_runbook(service)",
+      ...(userId ? ["forget_preference(preference)"] : []),
       ...(canOpenIncident
         ? ["open_incidente(title, service, severity: critical | high | medium | low)"]
         : []),
@@ -611,7 +614,7 @@ const modelDependencies: PlanExecutionDependencies = {
     const messages: PromptMessage[] = [
       [
         "system",
-        'Classify the provided plan step and return only one JSON object matching either {"kind":"tool","tool":"list_alerts|open_incidente|resolve_incidente|List_incidentes|consultar_runbook","args":{...}} or {"kind":"reasoning","observation":"..."}. Do not call or request tools directly. ' +
+        'Classify the provided plan step and return only one JSON object matching either {"kind":"tool","tool":"list_alerts|open_incidente|resolve_incidente|List_incidentes|consultar_runbook|forget_preference","args":{...}} or {"kind":"reasoning","observation":"..."}. Do not call or request tools directly. ' +
           "Return exactly one selection. " +
           "For an executable operation, select one available tool " +
           `and supply its arguments. Available tools for this request: ${availableTools.join(", ")}. ` +
@@ -697,6 +700,8 @@ const modelDependencies: PlanExecutionDependencies = {
         selection.tool,
         args,
         store ?? getDefaultOpsStore(),
+        fetch,
+        userId,
       );
     } catch (error) {
       throw stageError(`Executor tool ${selection.tool}`, error);
@@ -839,6 +844,7 @@ export function createPlanAndExecuteStrategy(
               state.request,
               options.reflectionContext,
               store,
+              typeof input === "string" ? undefined : input.userId,
             );
           } catch (error) {
             const completed = state.done

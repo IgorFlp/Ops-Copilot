@@ -725,3 +725,42 @@ test("plan strategy receives structured history but restricts mutation authoriza
   );
   assert.equal(executorInput, "Check current alerts");
 });
+
+test("plan strategy passes request identity to tool execution without formatting it into the prompt", async () => {
+  let plannerInput = "";
+  let executorInput = "";
+  let scopedUserId: string | undefined;
+  const strategy = createPlanAndExecuteStrategy({
+    async plan(input) {
+      plannerInput = input;
+      return { steps: ["Forget the concise summary preference"], answer: "" };
+    },
+    async execute(_step, _done, input, _reflectionContext, _store, userId) {
+      executorInput = input;
+      scopedUserId = userId;
+      return {
+        tool: "forget_preference",
+        args: { preference: "concise summary" },
+        observation: '{"status":"forgotten"}',
+      };
+    },
+    async replan() {
+      return {
+        decision: "finish",
+        remainingSteps: [],
+        critique: "Preference was forgotten.",
+        answer: "I forgot that preference.",
+      };
+    },
+  });
+
+  await strategy.run({
+    userId: "operator-a",
+    message: "Forget my concise summary preference",
+    history: [],
+  });
+
+  assert.equal(plannerInput.includes("operator-a"), false);
+  assert.equal(executorInput, "Forget my concise summary preference");
+  assert.equal(scopedUserId, "operator-a");
+});

@@ -86,6 +86,79 @@ test("request-scoped tools do not expose incident mutations for alert creation",
   assert.ok(incidentTools.some(({ name }) => name === "open_incidente"));
 });
 
+test("forget_preference is bound to the current user and rejects unscoped calls", async () => {
+  const calls: Array<[string, string]> = [];
+  const memoryService = {
+    async forgetPreference(userId: string, preference: string) {
+      calls.push([userId, preference]);
+      return { status: "ambiguous" as const };
+    },
+  };
+  const tools = createOpsToolsForRequest(
+    "Forget my concise preference",
+    undefined,
+    [],
+    fetch,
+    "operator-a",
+    memoryService,
+  );
+  const forget = tools.find(({ name }) => name === "forget_preference");
+  assert.ok(forget);
+  assert.equal(
+    JSON.stringify(
+      await invokeOpsTool(
+        "forget_preference",
+        { preference: "concise incident summaries" },
+        undefined,
+        fetch,
+        "operator-a",
+        memoryService,
+      ),
+    ),
+    '{"status":"ambiguous"}',
+  );
+  assert.deepEqual(calls, [["operator-a", "concise incident summaries"]]);
+  await assert.rejects(
+    () =>
+      invokeOpsTool(
+        "forget_preference",
+        { preference: "" },
+        undefined,
+        fetch,
+        "operator-a",
+        memoryService,
+      ),
+  );
+
+  const unscopedTools = createOpsToolsForRequest("Forget my preference");
+  assert.ok(!unscopedTools.some(({ name }) => name === "forget_preference"));
+  await assert.rejects(
+    () => invokeOpsTool("forget_preference", { preference: "concise" }),
+    (error: unknown) =>
+      error instanceof DomainError && error.code === "VALIDATION",
+  );
+});
+
+test("forget_preference reports memory-service failures instead of claiming success", async () => {
+  const memoryService = {
+    async forgetPreference() {
+      throw new Error("storage unavailable");
+    },
+  };
+
+  await assert.rejects(
+    invokeOpsTool(
+      "forget_preference",
+      { preference: "concise reports" },
+      undefined,
+      fetch,
+      "operator-a",
+      memoryService,
+    ),
+    /storage unavailable/,
+  );
+});
+
 test("tools expose expected names, defaults, and serialized service results", async () => {
   const calls: string[] = [];
   const tools = createOpsTools({
@@ -236,13 +309,13 @@ test("provider status tool returns failures as observations and dispatch validat
 
   assert.equal(calls, 2);
   assert.match(String(result), /Não consegui consultar o status de github/);
-  assert.throws(
+  await assert.rejects(
     () =>
       invokeOpsTool(
-      "check_provider_status",
-      { provider: "aws" },
-      undefined,
-      failFetch,
+        "check_provider_status",
+        { provider: "aws" },
+        undefined,
+        failFetch,
       ),
   );
   assert.equal(calls, 2);

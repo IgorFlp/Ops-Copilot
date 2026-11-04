@@ -20,6 +20,7 @@ async function withChatServer(
     ...options,
     conversationStore: new FakeConversationStore(),
     historyMessagesThreshold: 12,
+    memoryService: null,
   }));
   app.use(errorHandler);
   const server = app.listen(0, "127.0.0.1");
@@ -82,7 +83,10 @@ test("invalid chat bodies return 400 with field issues before strategy execution
   await withChatServer(registry, undefined, async (url) => {
     for (const body of [
       {},
+      { message: "Check" },
       { message: "  " },
+      { userId: "operator-1", message: " " },
+      { userId: " ", message: "Check" },
       { message: 42 },
       { message: "Check", conversationId: "" },
       { message: "Check", conversationId: 42 },
@@ -129,6 +133,7 @@ test("unknown strategies return 422 and do not execute another strategy", async 
 
   await withChatServer(registry, undefined, async (url) => {
     const response = await post(url, {
+      userId: "operator-1",
       message: "Check alerts",
       strategy: "unknown",
     });
@@ -157,7 +162,7 @@ test("strategy deadline returns 504 and strategy errors are sanitized", async ()
   ]);
 
   await withChatServer(slowRegistry, { timeoutMs: 5 }, async (url) => {
-    const response = await post(url, { message: "Wait" });
+    const response = await post(url, { userId: "operator-1", message: "Wait" });
     assert.equal(response.status, 504);
     assert.deepEqual(await response.json(), { error: "Request timed out" });
   });
@@ -171,7 +176,7 @@ test("strategy deadline returns 504 and strategy errors are sanitized", async ()
     },
   ]);
   await withChatServer(failingRegistry, undefined, async (url) => {
-    const response = await post(url, { message: "Fail" });
+    const response = await post(url, { userId: "operator-1", message: "Fail" });
     assert.equal(response.status, 500);
     assert.deepEqual(await response.json(), {
       error: "Internal server error",

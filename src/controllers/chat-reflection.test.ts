@@ -21,6 +21,7 @@ async function withChatServer(
   app.use(createChatRouter(registry, {
     conversationStore: new FakeConversationStore(),
     historyMessagesThreshold: 12,
+    memoryService: null,
   }));
   app.use(errorHandler);
   const server = app.listen(0, "127.0.0.1");
@@ -79,6 +80,7 @@ test("reflect true decorates only the selected strategy and returns its result",
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        userId: "operator-1",
         message: "Investigate",
         strategy: "plan-and-execute",
         reflect: true,
@@ -118,7 +120,10 @@ test("omitted and false reflect do not apply the reflection decorator", async ()
   });
 
   await withChatServer(registry, async (url) => {
-    for (const body of [{ message: "One" }, { message: "Two", reflect: false }]) {
+    for (const body of [
+      { userId: "operator-1", message: "One" },
+      { userId: "operator-1", message: "Two", reflect: false },
+    ]) {
       const response = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },

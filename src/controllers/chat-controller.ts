@@ -5,6 +5,14 @@ import type { StrategyRegistry } from "../agent/index.js";
 import { DomainError } from "../errors/domain-error.js";
 import { createChatService } from "../services/chat-service.js";
 import type { ChatService } from "../services/chat-service.js";
+import {
+  getDefaultLearningReflector,
+  getDefaultLearningTaskRunner,
+  getDefaultMemoryService,
+} from "../memory/memory-store.js";
+import type { MemoryRecall } from "../services/memory-service.js";
+import type { LearningReflector } from "../services/learning-reflector.js";
+import type { LearningTaskRunner } from "../services/learning-task-runner.js";
 import { getDefaultConversationStore } from "../store/default-conversation-store.js";
 import type { ConversationStore } from "../store/conversation-store.js";
 
@@ -15,10 +23,14 @@ export interface ChatControllerOptions {
   timeoutMs?: number;
   conversationStore?: ConversationStore;
   historyMessagesThreshold?: number;
+  memoryService?: MemoryRecall | null;
+  learningService?: LearningReflector;
+  learningTasks?: Pick<LearningTaskRunner, "schedule">;
 }
 
 const chatRequestSchema = z
   .object({
+    userId: z.string().trim().min(1),
     message: z.string().trim().min(1),
     strategy: z.string().trim().min(1).default("react"),
     reflect: z.boolean().default(false),
@@ -66,10 +78,26 @@ export function createChatController(
   }
   let chatService: ChatService | undefined;
   const getChatService = (): ChatService => {
+    const usesDefaultMemory = options.memoryService === undefined;
+    const memoryService =
+      options.memoryService === null
+        ? undefined
+        : options.memoryService ?? getDefaultMemoryService();
     chatService ??= createChatService(
       options.conversationStore ?? getDefaultConversationStore(),
       registry,
-      { historyMessagesThreshold: options.historyMessagesThreshold },
+      {
+        historyMessagesThreshold: options.historyMessagesThreshold,
+        memoryService,
+        learningService:
+          options.learningService ??
+          (usesDefaultMemory ? getDefaultLearningReflector() : undefined),
+        learningTasks:
+          options.learningTasks ??
+          (usesDefaultMemory || options.learningService
+            ? getDefaultLearningTaskRunner()
+            : undefined),
+      },
     );
     return chatService;
   };

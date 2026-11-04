@@ -19,6 +19,7 @@ class FakeConversationStore implements ConversationStore {
   readonly id = "conversation-1";
   private nextMessageId = 1;
   missing = false;
+  failAssistantAppend = false;
 
   async create() {
     this.events.push("create");
@@ -31,6 +32,9 @@ class FakeConversationStore implements ConversationStore {
     content: string,
   ): Promise<ConversationMessage> {
     this.events.push(`append:${role}`);
+    if (role === "assistant" && this.failAssistantAppend) {
+      throw new Error("assistant persistence failed");
+    }
     if (this.missing || conversationId !== this.id) {
       throw new DomainError("Conversation not found", "NOT_FOUND");
     }
@@ -83,7 +87,10 @@ test("chat service creates, runs, and persists a new conversation", async () => 
     { historyMessagesThreshold: 12 },
   );
 
-  const result = await service.runChat({ message: "Check alerts" });
+  const result = await service.runChat({
+    userId: "operator-1",
+    message: "Check alerts",
+  });
 
   assert.equal(result.conversationId, store.id);
   assert.deepEqual(store.events, [
@@ -92,7 +99,11 @@ test("chat service creates, runs, and persists a new conversation", async () => 
     "append:user",
     "append:assistant",
   ]);
-  assert.deepEqual(received, [{ message: "Check alerts", history: [] }]);
+  assert.deepEqual(received, [{
+    userId: "operator-1",
+    message: "Check alerts",
+    history: [],
+  }]);
   assert.deepEqual(store.messages.map(({ role }) => role), [
     "user",
     "assistant",
@@ -111,6 +122,7 @@ test("chat service reuses a conversation and does not create one for an unknown 
 
   await assert.rejects(
     service.runChat({
+      userId: "operator-1",
       message: "Follow up",
       conversationId: store.id,
     }),
@@ -132,7 +144,9 @@ test("chat service does not persist an assistant message when strategy fails", a
     { historyMessagesThreshold: 12 },
   );
 
-  await assert.rejects(service.runChat({ message: "Fail" }));
+  await assert.rejects(
+    service.runChat({ userId: "operator-1", message: "Fail" }),
+  );
   assert.deepEqual(store.messages.map(({ role }) => role), ["user"]);
 });
 
@@ -157,6 +171,7 @@ test("chat service composes empty, partial, exact, and capped history", async ()
     );
 
     const result = await service.runChat({
+      userId: "operator-1",
       message: "current request",
       conversationId: store.id,
     });
@@ -164,6 +179,7 @@ test("chat service composes empty, partial, exact, and capped history", async ()
     const usedCount = Math.min(priorCount, threshold);
     const firstUsed = priorCount - usedCount + 1;
     assert.deepEqual(received, [{
+      userId: "operator-1",
       message: "current request",
       history: Array.from({ length: usedCount }, (_, index) => {
         const messageNumber = firstUsed + index;
@@ -175,6 +191,229 @@ test("chat service composes empty, partial, exact, and capped history", async ()
     }]);
     assert.equal(result.metrics.historyMessages, usedCount);
   }
+});
+
+test("chat service recalls scoped facts and passes them separately from history", async () => {
+  const store = new FakeConversationStore();
+  const conversation = await store.create();
+  await store.append(conversation.id, "user", "Earlier question");
+  await store.append(conversation.id, "assistant", "Earlier answer");
+  const received: StrategyInput[] = [];
+  const memoryService = {
+    async recall(userId: string, query: string) {
+      assert.equal(userId, "operator-1");
+      assert.equal(query, "Where is the service hosted?");
+      return [{
+        id: 1,
+        userId,
+        fact: "The production service runs in Frankfurt.",
+        createdAt: "2026-11-04T00:00:00.000Z",
+        score: 0.81,
+      }];
+    },
+  };
+  const service = createChatService(
+    store,
+    createStrategyRegistry([fakeStrategy(received)]),
+    { historyMessagesThreshold: 12, memoryService },
+  );
+
+  const result = await service.runChat({
+    userId: "operator-1",
+    message: "Where is the service hosted?",
+    conversationId: conversation.id,
+  });
+
+  assert.deepEqual(received, [{
+    userId: "operator-1",
+    message: "Where is the service hosted?",
+    history: [
+      { role: "user", content: "Earlier question" },
+      { role: "assistant", content: "Earlier answer" },
+    ],
+    memoryFacts: ["The production service runs in Frankfurt."],
+  }]);
+  assert.equal(result.metrics.historyMessages, 2);
+});
+
+test("chat returns before scheduled post-response learning completes", async () => {
+  const store = new FakeConversationStore();
+  const received: StrategyInput[] = [];
+  const scheduled: Array<() => Promise<void>> = [];
+  let releaseLearning!: () => void;
+  const learningGate = new Promise<void>((resolve) => {
+    releaseLearning = resolve;
+  });
+  let learningFinished = false;
+  const service = createChatService(
+    store,
+    createStrategyRegistry([fakeStrategy(received)]),
+    {
+      historyMessagesThreshold: 12,
+      learningService: {
+        async learn(userId, message) {
+          assert.equal(userId, "operator-1");
+          assert.equal(message, "I prefer concise incident summaries.");
+          await learningGate;
+          learningFinished = true;
+        },
+      },
+      learningTasks: {
+        schedule(task) {
+          scheduled.push(task);
+        },
+      },
+    },
+  );
+
+  const result = await service.runChat({
+    userId: "operator-1",
+    message: "I prefer concise incident summaries.",
+  });
+
+  assert.equal(result.answer, "A deterministic answer");
+  assert.deepEqual(store.events.slice(-2), ["append:user", "append:assistant"]);
+  assert.equal(scheduled.length, 1);
+  assert.equal(learningFinished, false);
+  const learning = scheduled[0]();
+  releaseLearning();
+  await learning;
+  assert.equal(learningFinished, true);
+});
+
+test("chat does not schedule learning when strategy execution fails", async () => {
+  const store = new FakeConversationStore();
+  let scheduled = 0;
+  const service = createChatService(
+    store,
+    createStrategyRegistry([
+      fakeStrategy([], new Error("provider detail")),
+    ]),
+    {
+      historyMessagesThreshold: 12,
+      learningService: { async learn() {} },
+      learningTasks: {
+        schedule() {
+          scheduled += 1;
+        },
+      },
+    },
+  );
+
+  await assert.rejects(
+    service.runChat({ userId: "operator-1", message: "A durable preference" }),
+  );
+  assert.equal(scheduled, 0);
+});
+
+test("chat does not schedule learning when assistant persistence fails", async () => {
+  const store = new FakeConversationStore();
+  store.failAssistantAppend = true;
+  let scheduled = 0;
+  const service = createChatService(
+    store,
+    createStrategyRegistry([fakeStrategy([])]),
+    {
+      historyMessagesThreshold: 12,
+      learningService: { async learn() {} },
+      learningTasks: {
+        schedule() {
+          scheduled += 1;
+        },
+      },
+    },
+  );
+
+  await assert.rejects(
+    service.runChat({ userId: "operator-1", message: "I prefer concise reports." }),
+  );
+  assert.equal(scheduled, 0);
+});
+
+test("chat asks for clarification on an ambiguous correction before running strategy", async () => {
+  const store = new FakeConversationStore();
+  const received: StrategyInput[] = [];
+  let scheduled = 0;
+  const service = createChatService(
+    store,
+    createStrategyRegistry([fakeStrategy(received)]),
+    {
+      historyMessagesThreshold: 12,
+      learningService: {
+        async prepareCorrection(userId, message) {
+          assert.equal(userId, "operator-1");
+          assert.equal(message, "Correction: I prefer the other format.");
+          return { kind: "ambiguous" };
+        },
+        async learn() {
+          throw new Error("ambiguous corrections must not be learned");
+        },
+      },
+      learningTasks: {
+        schedule() {
+          scheduled += 1;
+        },
+      },
+    },
+  );
+
+  const result = await service.runChat({
+    userId: "operator-1",
+    message: "Correction: I prefer the other format.",
+  });
+
+  assert.match(result.answer, /Could you clarify which fact or preference/);
+  assert.equal(result.metrics.calls, 0);
+  assert.deepEqual(received, []);
+  assert.deepEqual(store.messages.map(({ role }) => role), [
+    "user",
+    "assistant",
+  ]);
+  assert.equal(scheduled, 0);
+});
+
+test("chat defers a prepared correction until the assistant response is persisted", async () => {
+  const store = new FakeConversationStore();
+  const scheduled: Array<() => Promise<void>> = [];
+  const preparedCorrection = {
+    kind: "replace" as const,
+    memoryId: 7,
+    fact: "The operator prefers detailed reports.",
+  };
+  const service = createChatService(
+    store,
+    createStrategyRegistry([fakeStrategy([])]),
+    {
+      historyMessagesThreshold: 12,
+      learningService: {
+        async prepareCorrection() {
+          return preparedCorrection;
+        },
+        async learn(userId, message, correction) {
+          assert.equal(userId, "operator-1");
+          assert.equal(message, "Correction: I prefer detailed reports.");
+          assert.deepEqual(correction, preparedCorrection);
+        },
+      },
+      learningTasks: {
+        schedule(task) {
+          assert.deepEqual(store.events.slice(-2), [
+            "append:user",
+            "append:assistant",
+          ]);
+          scheduled.push(task);
+        },
+      },
+    },
+  );
+
+  const result = await service.runChat({
+    userId: "operator-1",
+    message: "Correction: I prefer detailed reports.",
+  });
+  assert.equal(result.answer, "A deterministic answer");
+  assert.equal(scheduled.length, 1);
+  await scheduled[0]();
 });
 
 test("history threshold defaults to 12 and rejects invalid configured values", () => {

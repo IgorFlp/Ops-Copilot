@@ -24,6 +24,7 @@ type ReactAgentInvoker = (
   reflectionContext?: ReflectionContext,
   store?: IncidentServiceStore,
   authorizationInput?: string,
+  userId?: string,
 ) => Promise<ReactAgentOutput>;
 
 async function invokeAgent(
@@ -32,6 +33,7 @@ async function invokeAgent(
   reflectionContext?: ReflectionContext,
   store?: IncidentServiceStore,
   authorizationInput = input,
+  userId?: string,
 ): Promise<ReactAgentOutput> {
   const retryContext = reflectionContext
     ? [
@@ -49,6 +51,8 @@ async function invokeAgent(
         authorizationInput,
         store,
         reflectionContext?.completedActions,
+        fetch,
+        userId,
       ),
     ],
     prompt:
@@ -154,6 +158,7 @@ export function createReactStrategy(
         options.reflectionContext,
         store,
         typeof input === "string" ? input : input.message,
+        typeof input === "string" ? undefined : input.userId,
       );
       const answer = [...messages]
         .reverse()

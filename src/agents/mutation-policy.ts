@@ -49,7 +49,8 @@ export function isMutationAuthorized(
     | "open_incidente"
     | "resolve_incidente"
     | "List_incidentes"
-    | "consultar_runbook",
+    | "consultar_runbook"
+    | "forget_preference",
 ): boolean {
   const normalized = normalizeIntent(input);
   if (tool === "open_incidente") {

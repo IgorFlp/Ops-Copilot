@@ -48,25 +48,31 @@ test("ReAct captures actions, observations, answer, and model-call count", async
 test("ReAct formats structured history and authorizes tools from the current request only", async () => {
   let prompt = "";
   let authorizationInput = "";
+  let scopedUserId: string | undefined;
   const strategy = createReactStrategy(async (
     input,
     _maxIterations,
     _reflectionContext,
     _store,
     currentRequest,
+    userId,
   ) => {
     prompt = input;
     authorizationInput = currentRequest ?? "";
+    scopedUserId = userId;
     return { messages: [new AIMessage({ content: "Current answer." })] };
   });
 
   await strategy.run({
+    userId: "operator-a",
     message: "Check alerts",
     history: [{ role: "user", content: "Open an incident" }],
   });
 
   assert.equal(prompt, "User: Open an incident\n\nUser: Check alerts");
   assert.equal(authorizationInput, "Check alerts");
+  assert.equal(scopedUserId, "operator-a");
+  assert.equal(prompt.includes("operator-a"), false);
 });
 
 test("ReAct reports tool/model failures and validates iteration bounds", async () => {
