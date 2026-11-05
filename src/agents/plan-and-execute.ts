@@ -1,6 +1,12 @@
 import { z } from "zod";
 import { END, START, Annotation, StateGraph } from "@langchain/langgraph";
 import { DomainError } from "../errors/domain-error.js";
+import {
+  aggregateModelUsage,
+  combineModelUsage,
+  extractPromptTokens,
+  unknownModelUsage,
+} from "./model-usage.js";
 import { getDefaultOpsStore } from "../store/default-ops-store.js";
 import type { IncidentServiceStore } from "../services/incident-service.js";
 import { createModel } from "./model.js";
@@ -22,6 +28,7 @@ import {
   StrategyRunOptions,
   TraceEvent,
   formatStrategyInput,
+  ModelTokenUsage,
 } from "./types.js";
 import { priorMutationObservation } from "./tools.js";
 
@@ -92,6 +99,7 @@ export interface PlannerOutput {
   steps: PlanStep[];
   answer: string;
   calls?: number;
+  tokenUsage?: ModelTokenUsage;
 }
 
 export interface ExecutionOutput {
@@ -99,6 +107,7 @@ export interface ExecutionOutput {
   args?: Record<string, unknown>;
   observation: string;
   calls?: number;
+  tokenUsage?: ModelTokenUsage;
 }
 
 export interface ReplannerOutput {
@@ -107,33 +116,45 @@ export interface ReplannerOutput {
   critique: string;
   answer: string;
   calls?: number;
+  tokenUsage?: ModelTokenUsage;
 }
 
 type PromptMessage = ["system" | "user", string];
 
 class StructuredOutputParseError extends Error {
-  constructor(stage: string, cause: unknown) {
+  constructor(
+    stage: string,
+    cause: unknown,
+    readonly tokenUsage: ModelTokenUsage | undefined,
+  ) {
     super(`${stage} returned invalid structured output`, { cause });
   }
 }
 
-async function invokeParsedWithRetry<T>(
+export async function invokeParsedWithRetry<T>(
   invoke: (messages: PromptMessage[]) => Promise<unknown>,
   messages: PromptMessage[],
   parse: (value: unknown) => T,
   retryInstruction: string,
-): Promise<{ value: T; calls: number }> {
+): Promise<{
+  value: T;
+  calls: number;
+  tokenUsage: ModelTokenUsage | undefined;
+}> {
+  const promptTokenCounts: Array<number | undefined> = [];
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const response = await invoke(
       attempt === 0
         ? messages
         : [...messages, ["system", retryInstruction]],
     );
+    promptTokenCounts.push(extractPromptTokens(response));
+    const tokenUsage = aggregateModelUsage(promptTokenCounts);
     try {
-      return { value: parse(response), calls: attempt + 1 };
+      return { value: parse(response), calls: attempt + 1, tokenUsage };
     } catch (error) {
       if (attempt === 1) {
-        throw new StructuredOutputParseError("Model", error);
+        throw new StructuredOutputParseError("Model", error, tokenUsage);
       }
     }
   }
@@ -583,11 +604,21 @@ const modelDependencies: PlanExecutionDependencies = {
         parsePlannerOutput,
         "Return only the requested JSON object. Include every required key and do not call tools.",
       );
-      return { ...parsed.value, calls: parsed.calls };
+      return {
+        ...parsed.value,
+        calls: parsed.calls,
+        tokenUsage: parsed.tokenUsage,
+      };
     } catch (error) {
       if (error instanceof StructuredOutputParseError) {
         const fallback = createFallbackPlan(input);
-        if (fallback) return { ...fallback, calls: 2 };
+        if (fallback) {
+          return {
+            ...fallback,
+            calls: 2,
+            tokenUsage: error.tokenUsage,
+          };
+        }
       }
       throw stageError("Planner model output", error);
     }
@@ -646,6 +677,7 @@ const modelDependencies: PlanExecutionDependencies = {
     ];
     let selection: ExecutorSelection;
     let llmCalls = 0;
+    let tokenUsage: ModelTokenUsage | undefined;
     try {
       const parsed = await invokeParsedWithRetry(
         (prompt) => executor.invoke(prompt),
@@ -655,6 +687,10 @@ const modelDependencies: PlanExecutionDependencies = {
       );
       selection = parsed.value;
       llmCalls = parsed.calls;
+      tokenUsage = parsed.tokenUsage;
+      if (selection.kind === "reasoning") {
+        return { observation: selection.observation, calls: llmCalls, tokenUsage };
+      }
     } catch (error) {
       if (!(error instanceof StructuredOutputParseError)) {
         throw stageError("Executor model call", error);
@@ -663,9 +699,14 @@ const modelDependencies: PlanExecutionDependencies = {
       if (!inferred) throw stageError("Executor model output", error);
       selection = inferred;
       llmCalls = 2;
+      tokenUsage = error.tokenUsage;
     }
     if (selection.kind === "reasoning") {
-      return { observation: selection.observation, calls: llmCalls };
+      return {
+        observation: selection.observation,
+        calls: llmCalls,
+        tokenUsage,
+      };
     }
     const args = normalizeToolArguments(selection.tool, selection.args);
     if (!isMutationAuthorized(input, selection.tool)) {
@@ -691,6 +732,7 @@ const modelDependencies: PlanExecutionDependencies = {
           args,
           observation: previous,
           calls: llmCalls,
+          tokenUsage,
         };
       }
     }
@@ -708,7 +750,7 @@ const modelDependencies: PlanExecutionDependencies = {
     }
     const observation =
       typeof result === "string" ? result : JSON.stringify(result) ?? String(result);
-    return { tool: selection.tool, args, observation, calls: llmCalls };
+    return { tool: selection.tool, args, observation, calls: llmCalls, tokenUsage };
   },
   async replan(input, done, remainingSteps) {
     const replanner = createModel().withStructuredOutput(replannerSchema, {
@@ -742,6 +784,7 @@ const modelDependencies: PlanExecutionDependencies = {
         ...parsed.value,
         answer: parsed.value.answer ?? "",
         calls: parsed.calls,
+        tokenUsage: parsed.tokenUsage,
       };
     } catch (error) {
       throw stageError("Replanner model output", error);
@@ -767,6 +810,10 @@ const PlanState = Annotation.Root({
   calls: Annotation<number>({
     reducer: (_current, update) => update,
     default: () => 0,
+  }),
+  tokenUsage: Annotation<ModelTokenUsage | undefined>({
+    reducer: (_current, update) => update,
+    default: () => undefined,
   }),
   trace: Annotation<TraceEvent[]>({
     reducer: (current, update) => current.concat(update),
@@ -823,6 +870,11 @@ export function createPlanAndExecuteStrategy(
             plan,
             answer: result.answer,
             calls: state.calls + (result.calls ?? 1),
+            tokenUsage: combineModelUsage(
+              state.tokenUsage,
+              result.tokenUsage ??
+                unknownModelUsage(result.calls ?? 1),
+            ),
             trace: [
               {
                 type: "plan" as const,
@@ -865,6 +917,11 @@ export function createPlanAndExecuteStrategy(
             done: [[step, execution.observation] as CompletedStep],
             iterations: state.iterations + 1,
             calls: state.calls + (execution.calls ?? 1),
+            tokenUsage: combineModelUsage(
+              state.tokenUsage,
+              execution.tokenUsage ??
+                unknownModelUsage(execution.calls ?? 1),
+            ),
             trace: [
               ...(execution.tool
                 ? [
@@ -906,6 +963,11 @@ export function createPlanAndExecuteStrategy(
             plan,
             answer: result.answer,
             calls: state.calls + (result.calls ?? 1),
+            tokenUsage: combineModelUsage(
+              state.tokenUsage,
+              result.tokenUsage ??
+                unknownModelUsage(result.calls ?? 1),
+            ),
             trace: [
               {
                 type: "critique" as const,
@@ -958,6 +1020,7 @@ export function createPlanAndExecuteStrategy(
         answer,
         trace: [...result.trace, { type: "answer", content: answer }],
         metrics: { calls: result.calls, latencyMs: Date.now() - started },
+        tokenUsage: result.tokenUsage,
       };
     },
   };

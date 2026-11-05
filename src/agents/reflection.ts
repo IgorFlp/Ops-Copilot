@@ -1,5 +1,11 @@
 import { z } from "zod";
 import { DomainError } from "../errors/domain-error.js";
+import {
+  aggregateModelUsage,
+  combineModelUsage,
+  extractPromptTokens,
+  unknownModelUsage,
+} from "./model-usage.js";
 import { createModel } from "./model.js";
 import {
   ReasoningResult,
@@ -10,6 +16,7 @@ import {
   StrategyRunOptions,
   TraceEvent,
   formatStrategyInput,
+  ModelTokenUsage,
 } from "./types.js";
 
 const DEFAULT_MAX_REFLECTION = 2;
@@ -41,10 +48,10 @@ const CRITIC_PROMPT =
 export async function critique(
   input: string,
   result: ReasoningResult,
-): Promise<ReflectionVerdict> {
+): Promise<unknown> {
   const observations = observationsOf(result.trace);
   return createModel()
-    .withStructuredOutput(verdictSchema)
+    .withStructuredOutput(verdictSchema, { includeRaw: true })
     .invoke([
       ["system", CRITIC_PROMPT],
       [
@@ -128,7 +135,9 @@ function mergeActions(
 }
 
 function parseVerdict(value: unknown): ReflectionVerdict {
-  const parsed = verdictSchema.safeParse(value);
+  const candidate =
+    isRecord(value) && "parsed" in value ? value.parsed : value;
+  const parsed = verdictSchema.safeParse(candidate);
   if (!parsed.success) {
     throw new DomainError(
       `Critic output failed: ${parsed.error.message}`,
@@ -189,6 +198,7 @@ export function withReflection(
       ];
       let calls = 0;
       let regenerations = 0;
+      let tokenUsage: ModelTokenUsage | undefined;
       let current = await strategy.run(input, {
         ...runOptions,
         maxReflection: undefined,
@@ -200,6 +210,11 @@ export function withReflection(
 
       while (true) {
         calls += current.metrics.calls;
+        tokenUsage = combineModelUsage(
+          tokenUsage,
+          current.tokenUsage ??
+            unknownModelUsage(current.metrics.calls),
+        );
         trace.push(...current.trace);
         reflectionContext.observations.push(...observationsOf(current.trace));
         reflectionContext.completedActions = mergeActions(
@@ -211,7 +226,12 @@ export function withReflection(
           ...current,
           trace: [...trace],
         };
-        const verdict = parseVerdict(await critic(critiqueInput, candidate));
+        const criticResult = await critic(critiqueInput, candidate);
+        const verdict = parseVerdict(criticResult);
+        tokenUsage = combineModelUsage(
+          tokenUsage,
+          aggregateModelUsage([extractPromptTokens(criticResult)]),
+        );
         calls += 1;
         trace.push({
           type: "critique",
@@ -223,6 +243,7 @@ export function withReflection(
             answer: current.answer,
             trace,
             metrics: { calls, latencyMs: Date.now() - started },
+            tokenUsage,
           };
         }
 
@@ -232,6 +253,7 @@ export function withReflection(
             answer: current.answer,
             trace,
             metrics: { calls, latencyMs: Date.now() - started },
+            tokenUsage,
           };
         }
 
@@ -243,11 +265,17 @@ export function withReflection(
         regenerations += 1;
         if (regenerations === maxReflection) {
           calls += current.metrics.calls;
+          tokenUsage = combineModelUsage(
+            tokenUsage,
+            current.tokenUsage ??
+              unknownModelUsage(current.metrics.calls),
+          );
           trace.push(...current.trace);
           return {
             answer: current.answer,
             trace,
             metrics: { calls, latencyMs: Date.now() - started },
+            tokenUsage,
           };
         }
       }

@@ -51,6 +51,30 @@ test("runs selected strategies against the same input with the same limit", asyn
   assert.deepEqual(result.map(({ result: run }) => run.metrics.calls), [1, 1]);
 });
 
+test("omits internal token usage from public arena results", async () => {
+  const service = createArenaService([{
+    name: "react",
+    async run() {
+      return {
+        answer: "A measured answer",
+        trace: [{ type: "answer", content: "A measured answer" }],
+        metrics: { calls: 1, latencyMs: 2 },
+        tokenUsage: { modelCalls: 1, promptTokens: 17 },
+      };
+    },
+  }]);
+
+  const [result] = await service.run("Check alerts");
+  assert.deepEqual(result, {
+    strategy: "react",
+    result: {
+      answer: "A measured answer",
+      trace: [{ type: "answer", content: "A measured answer" }],
+      metrics: { calls: 1, latencyMs: 2 },
+    },
+  });
+});
+
 test("passes reflection bounds to explicitly selected reflected strategies", async () => {
   const received: Array<[string, number | undefined]> = [];
   const makeStrategy = (name: string): ReasoningStrategy => ({

@@ -33,10 +33,16 @@ export interface ReasoningMetrics {
   latencyMs: number;
 }
 
+export interface ModelTokenUsage {
+  modelCalls: number;
+  promptTokens?: number;
+}
+
 export interface ReasoningResult {
   answer: string;
   trace: TraceEvent[];
   metrics: ReasoningMetrics;
+  tokenUsage?: ModelTokenUsage;
 }
 
 export interface StrategyHistoryMessage {

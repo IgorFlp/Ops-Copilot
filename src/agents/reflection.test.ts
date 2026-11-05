@@ -16,8 +16,14 @@ function result(
     { type: "observation", content: `Evidence for ${answer}` },
     { type: "answer", content: answer },
   ],
+  tokenUsage?: ReasoningResult["tokenUsage"],
 ): ReasoningResult {
-  return { answer, trace, metrics: { calls, latencyMs: 3 } };
+  return {
+    answer,
+    trace,
+    metrics: { calls, latencyMs: 3 },
+    ...(tokenUsage ? { tokenUsage } : {}),
+  };
 }
 
 function strategy(
@@ -56,6 +62,50 @@ test("returns an approved initial answer and evaluates request and observations"
   });
   assert.equal(output.answer, "The answer");
   assert.equal(output.metrics.calls, 2);
+});
+
+test("combines actual strategy and critic usage across regeneration", async () => {
+  let runs = 0;
+  const reflected = withReflection(
+    strategy(async () => {
+      runs += 1;
+      return result(
+        `Answer ${runs}`,
+        1,
+        undefined,
+        { modelCalls: 1, promptTokens: runs === 1 ? 5 : 7 },
+      );
+    }),
+    {
+      maxReflection: 1,
+      critic: async () => ({
+        parsed: { approved: false, feedback: "Revise once." },
+        raw: { usage_metadata: { input_tokens: 3 } },
+      }),
+    },
+  );
+
+  const output = await reflected.run("Investigate");
+
+  assert.deepEqual(output.tokenUsage, { modelCalls: 3, promptTokens: 15 });
+});
+
+test("omits reflected prompt total when any strategy or critic usage is unavailable", async () => {
+  const reflected = withReflection(
+    strategy(async () =>
+      result("The answer", 1, undefined, { modelCalls: 1 }),
+    ),
+    {
+      critic: async () => ({
+        parsed: { approved: true, feedback: "Evidence supports the answer." },
+        raw: { usage_metadata: { input_tokens: 3 } },
+      }),
+    },
+  );
+
+  const output = await reflected.run("Investigate");
+
+  assert.deepEqual(output.tokenUsage, { modelCalls: 2 });
 });
 
 test("regenerates with critique feedback and passes prior observations", async () => {

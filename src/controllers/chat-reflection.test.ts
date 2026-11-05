@@ -94,7 +94,12 @@ test("reflect true decorates only the selected strategy and returns its result",
         { type: "answer", content: "plan-and-execute answer" },
         { type: "critique", content: "Reviewed", approved: true },
       ],
-      metrics: { calls: 3, latencyMs: 4, historyMessages: 0 },
+      metrics: {
+        calls: 3,
+        latencyMs: 4,
+        historyMessages: 0,
+        contextBreakdown: { currentMessage: 2 },
+      },
       conversationId: "conversation-1",
     });
   });

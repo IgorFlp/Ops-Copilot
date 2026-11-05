@@ -4,6 +4,7 @@ import {
   createPlanAndExecuteStrategy,
   createFallbackPlan,
   inferExecutorSelectionFromStep,
+  invokeParsedWithRetry,
   isMutationAuthorized,
   parseExecutorSelection,
   parsePlannerOutput,
@@ -368,6 +369,118 @@ test("plan strategy executes one tool step then replans through finish", async (
   );
   assert.ok(result.trace.some(({ type, content }) => type === "critique" && content.startsWith("adjust:")));
   assert.ok(result.trace.some(({ type, content }) => type === "critique" && content.startsWith("finish:")));
+});
+
+test("plan strategy combines actual usage from planner, executor, and replanner", async () => {
+  const strategy = createPlanAndExecuteStrategy({
+    async plan() {
+      return {
+        steps: [step(1)],
+        answer: "",
+        calls: 2,
+        tokenUsage: { modelCalls: 2, promptTokens: 10 },
+      };
+    },
+    async execute(planStep) {
+      return {
+        ...execution(planStep),
+        calls: 2,
+        tokenUsage: { modelCalls: 2, promptTokens: 20 },
+      };
+    },
+    async replan() {
+      return {
+        decision: "finish",
+        remainingSteps: [],
+        critique: "Complete",
+        answer: "Done",
+        calls: 1,
+        tokenUsage: { modelCalls: 1, promptTokens: 30 },
+      };
+    },
+  });
+
+  const result = await strategy.run("Check alerts");
+  assert.equal(result.metrics.calls, 5);
+  assert.deepEqual(result.tokenUsage, { modelCalls: 5, promptTokens: 60 });
+});
+
+test("plan strategy omits total usage when any graph stage is incomplete", async () => {
+  const strategy = createPlanAndExecuteStrategy({
+    async plan() {
+      return {
+        steps: [step(1)],
+        answer: "",
+        tokenUsage: { modelCalls: 1, promptTokens: 10 },
+      };
+    },
+    async execute(planStep) {
+      return {
+        ...execution(planStep),
+        tokenUsage: { modelCalls: 1 },
+      };
+    },
+    async replan() {
+      return {
+        decision: "finish",
+        remainingSteps: [],
+        critique: "Complete",
+        answer: "Done",
+        tokenUsage: { modelCalls: 1, promptTokens: 30 },
+      };
+    },
+  });
+
+  const result = await strategy.run("Check alerts");
+  assert.deepEqual(result.tokenUsage, { modelCalls: 3 });
+});
+
+test("structured-output retries aggregate actual usage from raw responses", async () => {
+  const responses: unknown[] = [
+    {
+      raw: { usage_metadata: { input_tokens: 4 } },
+      parsed: null,
+    },
+    {
+      raw: {
+        response_metadata: {
+          tokenUsage: { promptTokens: 6 },
+        },
+      },
+      parsed: { steps: [], answer: "Ready" },
+    },
+  ];
+
+  const result = await invokeParsedWithRetry(
+    async () => responses.shift(),
+    [["user", "Check alerts"]],
+    parsePlannerOutput,
+    "Retry with valid JSON.",
+  );
+
+  assert.equal(result.calls, 2);
+  assert.deepEqual(result.value, { steps: [], answer: "Ready" });
+  assert.deepEqual(result.tokenUsage, { modelCalls: 2, promptTokens: 10 });
+});
+
+test("structured-output retries omit actual totals when any response lacks usage", async () => {
+  const responses: unknown[] = [
+    { raw: {}, parsed: null },
+    {
+      raw: { usage_metadata: { input_tokens: 6 } },
+      parsed: { steps: [], answer: "Ready" },
+    },
+  ];
+
+  const result = await invokeParsedWithRetry(
+    async () => responses.shift(),
+    [["user", "Check alerts"]],
+    parsePlannerOutput,
+    "Retry with valid JSON.",
+  );
+
+  assert.equal(result.calls, 2);
+  assert.deepEqual(result.tokenUsage, { modelCalls: 2 });
 });
 
 test("noReplanner executes the initial plan without invoking the replanner", async () => {

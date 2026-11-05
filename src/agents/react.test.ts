@@ -42,7 +42,50 @@ test("ReAct captures actions, observations, answer, and model-call count", async
   assert.deepEqual(result.trace[0].tools, ["list_alerts"]);
   assert.deepEqual(result.trace[0].args, { status: "firing" });
   assert.equal(result.metrics.calls, 2);
+  assert.deepEqual(result.tokenUsage, { modelCalls: 2 });
   assert.ok(result.metrics.latencyMs >= 0);
+});
+
+test("ReAct aggregates actual usage for every model response", async () => {
+  const strategy = createReactStrategy(async () => ({
+    messages: [
+      new AIMessage({
+        content: "",
+        tool_calls: [
+          {
+            id: "call-1",
+            name: "list_alerts",
+            args: { status: "firing" },
+            type: "tool_call",
+          },
+        ],
+        usage_metadata: { input_tokens: 31, output_tokens: 2, total_tokens: 33 },
+      }),
+      new ToolMessage({ content: "[]", tool_call_id: "call-1" }),
+      new AIMessage({
+        content: "No alerts are firing.",
+        usage_metadata: { input_tokens: 38, output_tokens: 5, total_tokens: 43 },
+      }),
+    ],
+  }));
+
+  const result = await strategy.run("Check alerts");
+  assert.deepEqual(result.tokenUsage, { modelCalls: 2, promptTokens: 69 });
+});
+
+test("ReAct omits total actual usage if any model response lacks usage", async () => {
+  const strategy = createReactStrategy(async () => ({
+    messages: [
+      new AIMessage({ content: "Thinking" }),
+      new AIMessage({
+        content: "Answer.",
+        usage_metadata: { input_tokens: 8, output_tokens: 2, total_tokens: 10 },
+      }),
+    ],
+  }));
+
+  const result = await strategy.run("Check alerts");
+  assert.deepEqual(result.tokenUsage, { modelCalls: 2 });
 });
 
 test("ReAct formats structured history and authorizes tools from the current request only", async () => {

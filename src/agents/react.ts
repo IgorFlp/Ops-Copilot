@@ -13,6 +13,7 @@ import {
   formatStrategyInput,
 } from "./types.js";
 import { createOpsToolsForRequest } from "./tools.js";
+import { aggregateModelUsage, extractPromptTokens } from "./model-usage.js";
 
 const DEFAULT_MAX_ITERATIONS = 8;
 const MAX_ITERATIONS = 100;
@@ -180,6 +181,11 @@ export function createReactStrategy(
             .length,
           latencyMs: Date.now() - started,
         },
+        tokenUsage: aggregateModelUsage(
+          messages
+            .filter((message) => message instanceof AIMessage)
+            .map(extractPromptTokens),
+        ),
       };
     },
   };

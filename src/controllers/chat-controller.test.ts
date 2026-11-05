@@ -5,6 +5,7 @@ import test from "node:test";
 import type { AddressInfo } from "node:net";
 import {
   formatStrategyInput,
+  type ModelTokenUsage,
   type ReasoningStrategy,
 } from "../agents/types.js";
 import { createStrategyRegistry } from "../agent/index.js";
@@ -15,6 +16,7 @@ import { FakeConversationStore } from "./chat-test-helpers.js";
 function fakeStrategy(
   name: string,
   received: string[],
+  tokenUsage?: ModelTokenUsage,
 ): ReasoningStrategy {
   return {
     name,
@@ -24,6 +26,7 @@ function fakeStrategy(
         answer: `${name} answer`,
         trace: [{ type: "answer", content: `${name} answer` }],
         metrics: { calls: 2, latencyMs: 5 },
+        ...(tokenUsage ? { tokenUsage } : {}),
       };
     },
   };
@@ -73,17 +76,60 @@ test("HTTP chat defaults to react and returns the unwrapped reasoning result", a
     const body = await response.json() as {
       answer: string;
       trace: Array<{ type: string; content: string }>;
-      metrics: { calls: number; latencyMs: number; historyMessages: number };
+      metrics: {
+        calls: number;
+        latencyMs: number;
+        historyMessages: number;
+        contextBreakdown: { currentMessage: number };
+      };
       conversationId: string;
     };
     assert.deepEqual(body, {
       answer: "react answer",
       trace: [{ type: "answer", content: "react answer" }],
-      metrics: { calls: 2, latencyMs: 5, historyMessages: 0 },
+      metrics: {
+        calls: 2,
+        latencyMs: 5,
+        historyMessages: 0,
+        contextBreakdown: { currentMessage: 3 },
+      },
       conversationId: "conversation-1",
     });
   });
   assert.deepEqual(received, ["react:User: Check alerts"]);
+});
+
+test("HTTP chat exposes complete actual prompt usage without internal bookkeeping", async () => {
+  const registry = createStrategyRegistry([
+    fakeStrategy("react", [], { modelCalls: 2, promptTokens: 41 }),
+  ]);
+  const router = createChatRouter(registry, {
+    conversationStore: new FakeConversationStore(),
+    historyMessagesThreshold: 12,
+    memoryService: null,
+  });
+
+  await withChatServer(router, async (url) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userId: "operator-1", message: "Check alerts" }),
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json() as {
+      metrics: Record<string, unknown>;
+      tokenUsage?: unknown;
+    };
+    assert.deepEqual(body.metrics, {
+      calls: 2,
+      latencyMs: 5,
+      historyMessages: 0,
+      promptTokens: 41,
+      contextBreakdown: { currentMessage: 3 },
+    });
+    assert.equal("tokenUsage" in body, false);
+  });
 });
 
 test("HTTP chat selects an explicitly requested registered strategy", async () => {
@@ -114,13 +160,23 @@ test("HTTP chat selects an explicitly requested registered strategy", async () =
     const body = await response.json() as {
       answer: string;
       trace: Array<{ type: string; content: string }>;
-      metrics: { calls: number; latencyMs: number; historyMessages: number };
+      metrics: {
+        calls: number;
+        latencyMs: number;
+        historyMessages: number;
+        contextBreakdown: { currentMessage: number };
+      };
       conversationId: string;
     };
     assert.deepEqual(body, {
       answer: "plan-and-execute answer",
       trace: [{ type: "answer", content: "plan-and-execute answer" }],
-      metrics: { calls: 2, latencyMs: 5, historyMessages: 0 },
+      metrics: {
+        calls: 2,
+        latencyMs: 5,
+        historyMessages: 0,
+        contextBreakdown: { currentMessage: 5 },
+      },
       conversationId: "conversation-1",
     });
   });

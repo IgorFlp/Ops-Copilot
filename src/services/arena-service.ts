@@ -2,9 +2,9 @@ import { DomainError } from "../errors/domain-error.js";
 import { defaultStrategies } from "../agent/index.js";
 import { withReflection } from "../agents/reflection.js";
 import {
-  ReasoningResult,
-  ReasoningStrategy,
-  StrategyRunOptions,
+  type ReasoningResult,
+  type ReasoningStrategy,
+  type StrategyRunOptions,
 } from "../agents/types.js";
 
 export const strategies: ReasoningStrategy[] = [
@@ -18,7 +18,7 @@ export interface ArenaRunOptions extends StrategyRunOptions {
 
 export interface ArenaResult {
   strategy: string;
-  result: ReasoningResult;
+  result: Omit<ReasoningResult, "tokenUsage">;
 }
 
 export function createArenaService(
@@ -53,13 +53,13 @@ export function createArenaService(
         return strategy;
       });
       return Promise.all(
-        selected.map(async (strategy) => ({
-          strategy: strategy.name,
-          result: await strategy.run(input, {
+        selected.map(async (strategy) => {
+          const { tokenUsage: _tokenUsage, ...result } = await strategy.run(input, {
             maxIterations: options.maxIterations,
             maxReflection: options.maxReflection,
-          }),
-        })),
+          });
+          return { strategy: strategy.name, result };
+        }),
       );
     },
   };
