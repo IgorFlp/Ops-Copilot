@@ -1,7 +1,7 @@
 import { DomainError } from "../errors/domain-error.js";
 import { ChatOpenAI } from "@langchain/openai";
 
-export function createModel(): ChatOpenAI {
+export function createModel(options: { maxTokens?: number } = {}): ChatOpenAI {
   const apiKey = process.env.OPENROUTER_API_KEY?.trim();
   const model = process.env.OPENROUTER_MODEL?.trim();
   if (!apiKey || !model) {
@@ -16,5 +16,8 @@ export function createModel(): ChatOpenAI {
     apiKey,
     configuration: { baseURL: "https://openrouter.ai/api/v1" },
     temperature: 0,
+    ...(options.maxTokens === undefined
+      ? {}
+      : { maxTokens: options.maxTokens }),
   });
 }

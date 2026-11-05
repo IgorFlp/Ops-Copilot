@@ -13,6 +13,11 @@ export interface ConversationMessage {
   createdAt: string;
 }
 
+export interface ConversationSummary {
+  content: string;
+  coveredThroughMessageId: number;
+}
+
 export interface ConversationStore {
   create(): Promise<ConversationRecord>;
   append(
@@ -23,6 +28,16 @@ export interface ConversationStore {
   lastMessages(
     conversationId: string,
     limit: number,
+  ): Promise<ConversationMessage[]>;
+  getSummary(conversationId: string): Promise<ConversationSummary | null>;
+  saveSummary(
+    conversationId: string,
+    content: string,
+    coveredThroughMessageId: number,
+  ): Promise<ConversationSummary>;
+  uncoveredDepartedMessages(
+    conversationId: string,
+    coveredThroughMessageId: number | null,
   ): Promise<ConversationMessage[]>;
   close(): void;
 }

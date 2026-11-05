@@ -6,6 +6,7 @@ import type {
   ConversationMessage,
   ConversationMessageRole,
   ConversationRecord,
+  ConversationSummary,
   ConversationStore,
 } from "./conversation-store.js";
 
@@ -48,6 +49,13 @@ function conversationMessage(row: SqliteRow): ConversationMessage {
   };
 }
 
+function conversationSummary(row: SqliteRow): ConversationSummary {
+  return {
+    content: stringField(row, "content"),
+    coveredThroughMessageId: numberField(row, "covered_through_message_id"),
+  };
+}
+
 export class SqliteConversationStore implements ConversationStore {
   readonly _db: DatabaseSync;
   private closed = false;
@@ -69,6 +77,14 @@ export class SqliteConversationStore implements ConversationStore {
       );
       CREATE INDEX IF NOT EXISTS messages_conversation_id_id_idx
         ON messages(conversation_id, id DESC);
+      CREATE TABLE IF NOT EXISTS conversation_summaries (
+        conversation_id TEXT PRIMARY KEY NOT NULL
+          REFERENCES conversations(id) ON DELETE CASCADE,
+        content TEXT NOT NULL,
+        covered_through_message_id INTEGER NOT NULL
+          REFERENCES messages(id),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
     `);
   }
 
@@ -139,6 +155,107 @@ export class SqliteConversationStore implements ConversationStore {
          LIMIT ?`,
       )
       .all(conversationId, limit)
+      .map(conversationMessage);
+  }
+
+  async getSummary(
+    conversationId: string,
+  ): Promise<ConversationSummary | null> {
+    this.ensureOpen();
+    if (!this.conversationExists(conversationId)) {
+      throw new DomainError(
+        `Conversation not found: ${conversationId}`,
+        "NOT_FOUND",
+      );
+    }
+    const row = this._db
+      .prepare(
+        `SELECT content, covered_through_message_id
+         FROM conversation_summaries
+         WHERE conversation_id = ?`,
+      )
+      .get(conversationId);
+    return row ? conversationSummary(row) : null;
+  }
+
+  async saveSummary(
+    conversationId: string,
+    content: string,
+    coveredThroughMessageId: number,
+  ): Promise<ConversationSummary> {
+    this.ensureOpen();
+    if (!this.conversationExists(conversationId)) {
+      throw new DomainError(
+        `Conversation not found: ${conversationId}`,
+        "NOT_FOUND",
+      );
+    }
+    const coverage = this._db
+      .prepare(
+        "SELECT 1 AS found FROM messages WHERE id = ? AND conversation_id = ?",
+      )
+      .get(coveredThroughMessageId, conversationId);
+    if (!coverage) {
+      throw new DomainError(
+        "Summary coverage message not found in conversation",
+        "VALIDATION",
+      );
+    }
+    this._db
+      .prepare(
+        `INSERT INTO conversation_summaries
+           (conversation_id, content, covered_through_message_id)
+         VALUES (?, ?, ?)
+         ON CONFLICT(conversation_id) DO UPDATE SET
+           content = excluded.content,
+           covered_through_message_id = excluded.covered_through_message_id,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
+      )
+      .run(conversationId, content, coveredThroughMessageId);
+    const row = this._db
+      .prepare(
+        `SELECT content, covered_through_message_id
+         FROM conversation_summaries
+         WHERE conversation_id = ?`,
+      )
+      .get(conversationId);
+    if (!row) {
+      throw new Error("Saved conversation summary could not be retrieved");
+    }
+    return conversationSummary(row);
+  }
+
+  async uncoveredDepartedMessages(
+    conversationId: string,
+    coveredThroughMessageId: number | null,
+  ): Promise<ConversationMessage[]> {
+    this.ensureOpen();
+    if (!this.conversationExists(conversationId)) {
+      throw new DomainError(
+        `Conversation not found: ${conversationId}`,
+        "NOT_FOUND",
+      );
+    }
+    return this._db
+      .prepare(
+        `SELECT id, conversation_id, role, content, created_at
+         FROM messages
+         WHERE conversation_id = ?
+           AND (? IS NULL OR id > ?)
+           AND id NOT IN (
+             SELECT id FROM messages
+             WHERE conversation_id = ?
+             ORDER BY id DESC
+             LIMIT 8
+           )
+         ORDER BY id ASC`,
+      )
+      .all(
+        conversationId,
+        coveredThroughMessageId,
+        coveredThroughMessageId,
+        conversationId,
+      )
       .map(conversationMessage);
   }
 
