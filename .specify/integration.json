@@ -3,7 +3,8 @@
   "integration_state_schema": 1,
   "installed_integrations": [
     "copilot",
-    "cursor-agent"
+    "cursor-agent",
+    "opencode"
   ],
   "integration_settings": {
     "copilot": {
@@ -13,6 +14,10 @@
     "cursor-agent": {
       "script": "ps",
       "invoke_separator": "-"
+    },
+    "opencode": {
+      "script": "ps",
+      "invoke_separator": "."
     }
   },
   "integration": "copilot",
