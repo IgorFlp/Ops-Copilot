@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { DomainError } from "../errors/domain-error.js";
+import { errorDetail, logEvent } from "../lib/log.js";
 import { createIncidentService } from "../services/incident-service.js";
 import type { IncidentServiceStore } from "../services/incident-service.js";
 import {
@@ -36,13 +37,23 @@ async function handleToolCall(
   toolName: string,
   handler: ToolHandler,
 ): Promise<{ content: [{ type: "text"; text: string }]; isError?: true }> {
+  const started = Date.now();
+  logEvent("mcp.tool.start", { tool: toolName });
   try {
+    const result = await handler();
+    logEvent("mcp.tool.success", {
+      tool: toolName,
+      durationMs: Date.now() - started,
+    });
     return {
-      content: [{ type: "text", text: JSON.stringify(await handler()) }],
+      content: [{ type: "text", text: JSON.stringify(result) }],
     };
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`[opspilot] ${toolName} failed: ${detail}\n`);
+    logEvent("mcp.tool.failure", {
+      tool: toolName,
+      durationMs: Date.now() - started,
+      error: errorDetail(error),
+    });
     return {
       content: [{ type: "text", text: failureMessage(error) }],
       isError: true,

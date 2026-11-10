@@ -5,8 +5,9 @@
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://localhost:3000}"
-USER_ID="${USER_ID:-u-plantao}"
+USER_ID="${CONVERSA_LONGA_USERID:-${USER_ID:-u-plantao}}"
 CHARS_PER_TOKEN="${CHARS_PER_TOKEN:-4}"
+START_CONVERSATION_ID="${CONVERSA_LONGA_CONVERSATIONID:-}"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "jq é obrigatório" >&2
@@ -46,6 +47,7 @@ MESSAGES=(
   "status geral do plantão agora"
   "feche com um resumo final do plantão"
 )
+MAX_TURNOS="${CONVERSA_LONGA_TURNOS:-${#MESSAGES[@]}}"
 
 estimate_tokens() {
   local text="$1"
@@ -55,15 +57,16 @@ estimate_tokens() {
   echo $(( chars / CHARS_PER_TOKEN ))
 }
 
-CONVERSATION_ID=""
+CONVERSATION_ID="$START_CONVERSATION_ID"
 TOTAL_TOKENS=0
 
-echo "Base: $BASE_URL | userId: $USER_ID | turnos: ${#MESSAGES[@]}"
+echo "Base: $BASE_URL | userId: $USER_ID | turnos: $MAX_TURNOS | conversationId inicial: ${CONVERSATION_ID:-novo}"
 echo "Métricas: promptTokens real (metrics); estimativa local req/res ~${CHARS_PER_TOKEN} chars/token (floor)"
 echo "---"
 
 for i in "${!MESSAGES[@]}"; do
   turn=$((i + 1))
+  if (( turn > MAX_TURNOS )); then break; fi
   message="${MESSAGES[$i]}"
   if [[ "$message" == "PLANTAR" ]]; then
     message="decisão do plantão: o freeze de deploys termina dia 15 — registre e considere isso daqui pra frente"
@@ -98,14 +101,16 @@ for i in "${!MESSAGES[@]}"; do
   TOTAL_TOKENS=$((TOTAL_TOKENS + turn_tokens))
   prompt_tokens=$(echo "$response" | jq -r '.metrics.promptTokens // "n/a"')
 
-  printf 'turno %02d | conversationId=%s | promptTokens=%s | req≈%d tok | res≈%d tok | total_turno≈%d | recalled=%s | hist=%s\n' \
+  printf 'turno %02d | conversationId=%s | promptTokens=%s | req≈%d tok | res≈%d tok | total_turno≈%d | memTok=%s | histTok=%s | sumTok=%s | hist=%s\n' \
     "$turn" \
     "$CONVERSATION_ID" \
     "$prompt_tokens" \
     "$req_tokens" \
     "$res_tokens" \
     "$turn_tokens" \
-    "$(echo "$response" | jq -r '.metrics.recalledMemories // 0')" \
+    "$(echo "$response" | jq -r '.metrics.contextBreakdown.memories // 0')" \
+    "$(echo "$response" | jq -r '.metrics.contextBreakdown.history // 0')" \
+    "$(echo "$response" | jq -r '.metrics.contextBreakdown.summary // 0')" \
     "$(echo "$response" | jq -r '.metrics.historyMessages // 0')"
 
   if [[ "$turn" -eq 3 ]]; then

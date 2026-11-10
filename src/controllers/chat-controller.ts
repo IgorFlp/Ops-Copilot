@@ -3,6 +3,7 @@ import { z } from "zod";
 import { strategyRegistry } from "../agent/index.js";
 import type { StrategyRegistry } from "../agent/index.js";
 import { DomainError } from "../errors/domain-error.js";
+import { errorDetail, logEvent } from "../lib/log.js";
 import { createChatService } from "../services/chat-service.js";
 import type { ChatService } from "../services/chat-service.js";
 import {
@@ -32,7 +33,9 @@ const chatRequestSchema = z
   .object({
     userId: z.string().trim().min(1),
     message: z.string().trim().min(1),
-    strategy: z.string().trim().min(1).default("react"),
+    strategy: z
+      .enum(["react", "plan-and-execute", "reflect:react"])
+      .optional(),
     reflect: z.boolean().default(false),
     conversationId: z.string().trim().min(1).optional(),
   })
@@ -120,10 +123,27 @@ export function createChatController(
         ) {
           throw error;
         }
+        logEvent("chat.execution_failure", {
+          error: errorDetail(error),
+        });
         throw new DomainError("Chat execution failed", "INTERNAL");
       }
       res.status(200).json(result);
     } catch (error) {
+      const body =
+        typeof req.body === "object" && req.body !== null
+          ? (req.body as Record<string, unknown>)
+          : {};
+      logEvent("chat.failure", {
+        userId: typeof body.userId === "string" ? body.userId : undefined,
+        conversationId:
+          typeof body.conversationId === "string"
+            ? body.conversationId
+            : undefined,
+        strategy:
+          typeof body.strategy === "string" ? body.strategy : undefined,
+        error: errorDetail(error),
+      });
       next(error);
     }
   };
