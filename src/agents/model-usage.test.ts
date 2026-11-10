@@ -76,14 +76,14 @@ test("combines strategy summaries and preserves incomplete usage", () => {
       { modelCalls: 2, promptTokens: 12 },
       { modelCalls: 1, promptTokens: 7 },
     ),
-    { modelCalls: 3, promptTokens: 19 },
+    { modelCalls: 3, promptTokens: 19, fallbackCount: 0, modelUsed: undefined, totalLatencyMs: 0 },
   );
   assert.deepEqual(
     combineModelUsage(
       { modelCalls: 1, promptTokens: 7 },
       { modelCalls: 2 },
     ),
-    { modelCalls: 3 },
+    { modelCalls: 3, fallbackCount: 0, modelUsed: undefined, totalLatencyMs: 0 },
   );
   assert.equal(combineModelUsage(), undefined);
 });
@@ -98,6 +98,6 @@ test("omits totals that overflow safe integer precision", () => {
       { modelCalls: 1, promptTokens: Number.MAX_SAFE_INTEGER },
       { modelCalls: 1, promptTokens: 1 },
     ),
-    { modelCalls: 2 },
+    { modelCalls: 2, fallbackCount: 0, modelUsed: undefined, totalLatencyMs: 0 },
   );
 });

@@ -63,19 +63,31 @@ export function combineModelUsage(
     (total, usage) => total + usage.modelCalls,
     0,
   );
+  
+  // Preserve extended fields
+  let modelUsed: string | undefined;
+  let fallbackCount = 0;
+  let totalLatencyMs = 0;
+  
+  for (const usage of present) {
+    if (usage.modelUsed) modelUsed = usage.modelUsed; // Keep last non-empty
+    if (usage.fallbackCount) fallbackCount += usage.fallbackCount;
+    if (usage.totalLatencyMs) totalLatencyMs += usage.totalLatencyMs;
+  }
+  
   if (
     !Number.isSafeInteger(modelCalls) ||
     present.some((usage) => usage.promptTokens === undefined)
   ) {
-    return { modelCalls };
+    return { modelCalls, modelUsed, fallbackCount, totalLatencyMs };
   }
 
   let promptTokens = 0;
   for (const usage of present) {
     if (usage.promptTokens !== undefined) promptTokens += usage.promptTokens;
   }
-  if (!Number.isSafeInteger(promptTokens)) return { modelCalls };
-  return { modelCalls, promptTokens };
+  if (!Number.isSafeInteger(promptTokens)) return { modelCalls, modelUsed, fallbackCount, totalLatencyMs };
+  return { modelCalls, promptTokens, modelUsed, fallbackCount, totalLatencyMs };
 }
 
 export function unknownModelUsage(
