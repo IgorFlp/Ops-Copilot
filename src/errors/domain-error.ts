@@ -5,7 +5,8 @@ export type DomainErrorCode =
   | "CONFIGURATION"
   | "UNSUPPORTED_STRATEGY"
   | "TIMEOUT"
-  | "INTERNAL";
+  | "INTERNAL"
+  | "MODEL_UNAVAILABLE";
 
 export class DomainError extends Error {
   constructor(

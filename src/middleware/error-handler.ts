@@ -1,6 +1,7 @@
 import type { ErrorRequestHandler } from "express";
 import { ZodError } from "zod";
 import { DomainError } from "../errors/domain-error.js";
+import { errorDetail, logEvent } from "../lib/log.js";
 
 function isMalformedJsonError(
   error: unknown,
@@ -34,6 +35,7 @@ export const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
 
   if (error instanceof DomainError) {
     if (error.code === "INTERNAL") {
+      logEvent("request.internal_error", { message: error.message });
       res.status(500).json({ error: "Internal server error" });
       return;
     }
@@ -50,11 +52,14 @@ export const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
             ? 422
             : error.code === "CONFIGURATION"
               ? 500
-              : 400;
+              : error.code === "MODEL_UNAVAILABLE"
+                ? 503
+                : 400;
     res.status(status).json({ error: error.message });
     return;
   }
 
+  logEvent("request.unhandled", { error: errorDetail(error) });
   console.error("Unhandled request error", error);
   res.status(500).json({ error: "Internal server error" });
 };
