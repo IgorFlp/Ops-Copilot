@@ -1,7 +1,9 @@
 .env
 node_modules
+web/node_modules/
 .env.*
 dist
+web/dist/
 build/
 *.log
 data/
