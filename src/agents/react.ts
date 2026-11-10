@@ -1,6 +1,7 @@
 import { AIMessage, BaseMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { DomainError } from "../errors/domain-error.js";
+import { logEvent } from "../lib/log.js";
 import type { IncidentServiceStore } from "../services/incident-service.js";
 import { createModel } from "./model.js";
 import {
@@ -161,6 +162,27 @@ export function createReactStrategy(
         typeof input === "string" ? input : input.message,
         typeof input === "string" ? undefined : input.userId,
       );
+      const aiMessages = messages.filter(
+        (message): message is AIMessage => message instanceof AIMessage,
+      );
+      const lastAiMessage = aiMessages[aiMessages.length - 1];
+      logEvent("react.completed", {
+        messages: messages.length,
+        aiMessages: aiMessages.length,
+        toolMessages: messages.filter(
+          (message) => message instanceof ToolMessage,
+        ).length,
+        toolCalls: aiMessages.reduce(
+          (sum, message) => sum + (message.tool_calls?.length ?? 0),
+          0,
+        ),
+        lastFinishReason: lastAiMessage?.response_metadata?.finish_reason,
+        lastContentChars: lastAiMessage
+          ? messageText(lastAiMessage.content).length
+          : 0,
+        lastUsage: lastAiMessage?.usage_metadata,
+        latencyMs: Date.now() - started,
+      });
       const answer = [...messages]
         .reverse()
         .find(
