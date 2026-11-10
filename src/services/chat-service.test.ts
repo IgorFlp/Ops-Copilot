@@ -290,6 +290,10 @@ test("chat service recalls scoped facts and passes them separately from history"
       { role: "assistant", content: "Earlier answer" },
     ],
     memoryFacts: ["The production service runs in Frankfurt."],
+    memoryEntries: [{
+      fact: "The production service runs in Frankfurt.",
+      score: 0.81,
+    }],
   }]);
   assert.equal(result.metrics.historyMessages, 2);
 });
@@ -346,6 +350,81 @@ test("chat metrics estimate each included context source and expose complete act
     },
   });
   assert.equal("tokenUsage" in result, false);
+});
+
+test("chat truncates context sections according to CONTEXT_BUDGET_ ceilings", async () => {
+  const previous = {
+    summary: process.env.CONTEXT_BUDGET_SUMMARY,
+    window: process.env.CONTEXT_BUDGET_WINDOW,
+    memories: process.env.CONTEXT_BUDGET_MEMORIES,
+  };
+  process.env.CONTEXT_BUDGET_SUMMARY = "2";
+  process.env.CONTEXT_BUDGET_WINDOW = "2";
+  process.env.CONTEXT_BUDGET_MEMORIES = "2";
+  try {
+    const store = new FakeConversationStore();
+    const conversation = await store.create();
+    for (let index = 1; index <= 3; index += 1) {
+      await store.append(
+        conversation.id,
+        index % 2 === 0 ? "assistant" : "user",
+        "h".repeat(100),
+      );
+    }
+    await store.saveSummary(conversation.id, "s".repeat(200), 3);
+    const memoryService = {
+      async recall() {
+        return [
+          {
+            id: 1,
+            userId: "operator-1",
+            fact: "m".repeat(100),
+            createdAt: "2026-11-04T00:00:00.000Z",
+            score: 0.9,
+          },
+          {
+            id: 2,
+            userId: "operator-1",
+            fact: "n".repeat(100),
+            createdAt: "2026-11-04T00:00:00.000Z",
+            score: 0.1,
+          },
+        ];
+      },
+    };
+    const service = createChatService(
+      store,
+      createStrategyRegistry([fakeStrategy([])]),
+      { historyMessagesThreshold: 12, memoryService },
+    );
+
+    const result = await service.runChat({
+      userId: "operator-1",
+      message: "abcd",
+      conversationId: conversation.id,
+    });
+
+    const breakdown = result.metrics.contextBreakdown;
+    assert.ok((breakdown.summary ?? Number.POSITIVE_INFINITY) <= 2);
+    assert.ok((breakdown.history ?? Number.POSITIVE_INFINITY) <= 2);
+    assert.ok((breakdown.memories ?? Number.POSITIVE_INFINITY) <= 2);
+  } finally {
+    if (previous.summary === undefined) {
+      delete process.env.CONTEXT_BUDGET_SUMMARY;
+    } else {
+      process.env.CONTEXT_BUDGET_SUMMARY = previous.summary;
+    }
+    if (previous.window === undefined) {
+      delete process.env.CONTEXT_BUDGET_WINDOW;
+    } else {
+      process.env.CONTEXT_BUDGET_WINDOW = previous.window;
+    }
+    if (previous.memories === undefined) {
+      delete process.env.CONTEXT_BUDGET_MEMORIES;
+    } else {
+      process.env.CONTEXT_BUDGET_MEMORIES = previous.memories;
+    }
+  }
 });
 
 test("chat omits actual usage when a strategy reports incomplete model usage", async () => {

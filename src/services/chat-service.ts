@@ -1,5 +1,6 @@
 import type { ReasoningResult } from "../agents/types.js";
 import type { ChatStrategyInput } from "../agents/types.js";
+import type { AttributedTraceEvent } from "../agents/types.js";
 import {
   summarizeConversation,
   type ConversationSummarizer,
@@ -11,9 +12,12 @@ import {
 import {
   strategyRegistry,
   type StrategyRegistry,
+  createProductionGraph,
+  type ProductionGraph,
 } from "../agent/index.js";
 import { DomainError } from "../errors/domain-error.js";
-import type { MemoryRecall } from "./memory-service.js";
+import { errorDetail, logEvent } from "../lib/log.js";
+import type { Memory, MemoryRecall } from "./memory-service.js";
 import type {
   ConversationMessage,
   ConversationStore,
@@ -21,6 +25,7 @@ import type {
 } from "../store/conversation-store.js";
 import type { CorrectionPreparation } from "./learning-reflector.js";
 import { estimateTokens } from "../context/tokens.js";
+import { buildContext } from "../context/context-builder.js";
 import {
   RECENT_HISTORY_MESSAGE_COUNT,
   selectDepartedBatch,
@@ -118,6 +123,7 @@ export class ChatService {
   private readonly learningService?: ChatServiceOptions["learningService"];
   private readonly learningTasks?: ChatServiceOptions["learningTasks"];
   private readonly summarizer: ConversationSummarizer;
+  private productionGraphPromise: Promise<ProductionGraph> | null = null;
 
   constructor(
     private readonly conversations: ConversationStore,
@@ -131,13 +137,24 @@ export class ChatService {
     this.learningTasks = options.learningTasks;
   }
 
+  private async getProductionGraph(): Promise<ProductionGraph> {
+    if (!this.productionGraphPromise) {
+      this.productionGraphPromise = createProductionGraph();
+    }
+    return this.productionGraphPromise;
+  }
+
   async runChat(input: ChatServiceInput): Promise<ChatServiceResult> {
-    const selected = this.registry.resolve(
-      input.strategy,
-      input.reflect ?? false,
-    );
+    const started = Date.now();
     const conversationId =
       input.conversationId ?? (await this.conversations.create()).id;
+    logEvent("chat.start", {
+      conversationId,
+      userId: input.userId,
+      strategy: input.strategy ?? "auto",
+      reflect: input.reflect ?? false,
+      messageChars: input.message.length,
+    });
     const newestFirst = await this.conversations.lastMessages(
       conversationId,
       RECENT_HISTORY_MESSAGE_COUNT,
@@ -145,9 +162,46 @@ export class ChatService {
     const history = selectRecentHistory(newestFirst);
     const { summary, summaryEvents, summaryPromptTokens } =
       await this.refreshSummary(conversationId);
-    const memories = this.memoryService
-      ? await this.memoryService.recall(input.userId, input.message)
-      : [];
+    let memories: Memory[];
+    try {
+      memories = this.memoryService
+        ? await this.memoryService.recall(input.userId, input.message)
+        : [];
+    } catch (error) {
+      logEvent("memory.failure", {
+        conversationId,
+        userId: input.userId,
+        error: errorDetail(error),
+      });
+      throw error;
+    }
+    logEvent("memory.recalled", {
+      conversationId,
+      userId: input.userId,
+      facts: memories.length,
+    });
+
+    const context = buildContext({
+      summary: summary?.content ?? null,
+      history,
+      memories: memories.map(({ fact, score }) => ({
+        fact,
+        score: score ?? 0,
+      })),
+      userMessage: input.message,
+    });
+    const sectionTokens = new Map(
+      context.sections.map(({ name, tokens }) => [name, tokens]),
+    );
+    logEvent("context.built", {
+      conversationId,
+      totalTokens: context.totalTokens,
+      truncated: context.truncatedSections,
+      system: sectionTokens.get("system") ?? 0,
+      summary: sectionTokens.get("summary") ?? 0,
+      window: sectionTokens.get("window") ?? 0,
+      memories: sectionTokens.get("memories") ?? 0,
+    });
 
     await this.conversations.append(conversationId, "user", input.message);
     const learningService = this.learningService;
@@ -161,27 +215,50 @@ export class ChatService {
       history,
       ...(summary ? { conversationSummary: summary.content } : {}),
       ...(memories.length > 0
-        ? { memoryFacts: memories.map(({ fact }) => fact) }
+        ? {
+            memoryFacts: memories.map(({ fact }) => fact),
+            memoryEntries: memories.map(({ fact, score }) => ({
+              fact,
+              score: score ?? 0,
+            })),
+          }
         : {}),
     };
-    let result: ReasoningResult;
+
+    let graphResult: { answer: string; trace: AttributedTraceEvent[]; metrics: { calls: number; latencyMs: number; tokenUsage?: { modelCalls: number; promptTokens?: number } } };
     if (correction?.kind === "ambiguous") {
-      result = {
+      graphResult = {
         answer: AMBIGUOUS_CORRECTION_ANSWER,
-        trace: [{ type: "answer", content: AMBIGUOUS_CORRECTION_ANSWER }],
+        trace: [{ type: "answer", content: AMBIGUOUS_CORRECTION_ANSWER, node: "context", timestamp: new Date().toISOString() }],
         metrics: { calls: 0, latencyMs: 0 },
       };
     } else {
       try {
-        result = await selected.strategy.run(strategyInput);
-      } catch {
+        const graph = await this.getProductionGraph();
+        const initialState = {
+          input: strategyInput,
+          selectionSource: input.strategy ? "override" : input.reflect ? "reflect" : "auto",
+          selectedStrategy: input.strategy as "react" | "plan-and-execute" | "reflect:react" | undefined,
+        };
+        const result = await graph.invoke(initialState);
+        graphResult = {
+          answer: result.strategyResult!.answer,
+          trace: result.trace,
+          metrics: result.metrics,
+        };
+      } catch (error) {
+        logEvent("strategy.failure", {
+          conversationId,
+          strategy: input.strategy ?? "auto",
+          error: errorDetail(error),
+        });
         throw new DomainError("Chat execution failed", "INTERNAL");
       }
     }
     await this.conversations.append(
       conversationId,
       "assistant",
-      result.answer,
+      graphResult.answer,
     );
     const learningTasks = this.learningTasks;
     if (
@@ -194,39 +271,44 @@ export class ChatService {
       );
     }
 
-    const publicResult = {
-      answer: result.answer,
-      trace: result.trace,
-      metrics: result.metrics,
-    };
+    const attributedSummaryEvents = summaryEvents.map((event) => ({
+      ...event,
+      node: "summary" as const,
+    }));
+
     const contextBreakdown: ContextBreakdown = {
       currentMessage: estimateTokens(input.message),
       ...(history.length > 0
-        ? { history: estimateTokens(history.map(({ content }) => content).join("")) }
+        ? { history: sectionTokens.get("window") ?? 0 }
         : {}),
       ...(memories.length > 0
-        ? { memories: estimateTokens(memories.map(({ fact }) => fact).join("")) }
+        ? { memories: sectionTokens.get("memories") ?? 0 }
         : {}),
       ...(summary
-        ? { summary: estimateTokens(summary.content) }
+        ? { summary: sectionTokens.get("summary") ?? 0 }
         : {}),
     };
-    const strategyUsage =
-      result.tokenUsage ??
-      (result.metrics.calls > 0
-        ? { modelCalls: result.metrics.calls }
-        : undefined);
     const combinedUsage = combineModelUsage(
-      strategyUsage,
+      graphResult.metrics.tokenUsage,
       aggregateModelUsage(summaryPromptTokens),
     );
+    logEvent("chat.completed", {
+      conversationId,
+      strategy: input.strategy ?? "auto",
+      durationMs: Date.now() - started,
+      calls: graphResult.metrics.calls,
+      historyMessages: history.length,
+      summary: summary?.coveredThroughMessageId ?? null,
+      truncated: context.truncatedSections,
+    });
 
     return {
-      ...publicResult,
-      trace: [...summaryEvents, ...publicResult.trace],
+      answer: graphResult.answer,
+      trace: [...attributedSummaryEvents, ...graphResult.trace],
       conversationId,
       metrics: {
-        ...result.metrics,
+        calls: graphResult.metrics.calls,
+        latencyMs: graphResult.metrics.latencyMs,
         historyMessages: history.length,
         ...(combinedUsage?.promptTokens !== undefined
           ? { promptTokens: combinedUsage.promptTokens }
@@ -252,11 +334,20 @@ export class ChatService {
         summary?.coveredThroughMessageId ?? null,
       );
     } catch (error) {
+      logEvent("summary.load_failure", {
+        conversationId,
+        error: errorDetail(error),
+      });
       if (error instanceof DomainError && error.code === "NOT_FOUND") {
         throw error;
       }
       throw new DomainError("Conversation summary could not be loaded", "INTERNAL");
     }
+    logEvent("summary.loaded", {
+      conversationId,
+      coveredThrough: summary?.coveredThroughMessageId ?? null,
+      uncovered: uncovered.length,
+    });
 
     const summaryEvents: ReasoningResult["trace"] = [];
     const summaryPromptTokens: Array<number | undefined> = [];
@@ -264,20 +355,41 @@ export class ChatService {
       const batch = selectDepartedBatch(uncovered);
       if (!batch) break;
 
+      logEvent("summary.batch", {
+        conversationId,
+        messages: batch.length,
+        firstId: batch[0]?.id,
+        lastId: batch[batch.length - 1]?.id,
+      });
       let generated: Awaited<ReturnType<ConversationSummarizer["summarize"]>>;
       try {
         generated = await this.summarizer.summarize({
           previousSummary: summary?.content ?? null,
           messages: batch.map(({ role, content }) => ({ role, content })),
         });
-      } catch {
+      } catch (error) {
+        logEvent("summary.failure", {
+          conversationId,
+          error: errorDetail(error),
+        });
         throw new DomainError("Conversation summary update failed", "INTERNAL");
       }
 
       const content =
         typeof generated?.content === "string" ? generated.content.trim() : "";
       const tokenCount = estimateTokens(content);
+      logEvent("summary.generated", {
+        conversationId,
+        contentChars: content.length,
+        tokens: tokenCount,
+        promptTokens: generated?.promptTokens,
+      });
       if (!content || tokenCount < 1 || tokenCount > 200) {
+        logEvent("summary.invalid", {
+          conversationId,
+          contentChars: content.length,
+          tokens: tokenCount,
+        });
         throw new DomainError("Conversation summary update failed", "INTERNAL");
       }
 
@@ -289,11 +401,21 @@ export class ChatService {
           coveredThroughMessageId,
         );
       } catch (error) {
+        logEvent("summary.save_failure", {
+          conversationId,
+          coveredThrough: coveredThroughMessageId,
+          error: errorDetail(error),
+        });
         if (error instanceof DomainError && error.code === "NOT_FOUND") {
           throw error;
         }
         throw new DomainError("Conversation summary update failed", "INTERNAL");
       }
+      logEvent("summary.saved", {
+        conversationId,
+        coveredThrough: coveredThroughMessageId,
+        tokens: tokenCount,
+      });
       summaryEvents.push({ type: "summarize", content: summary.content });
       summaryPromptTokens.push(
         typeof generated.promptTokens === "number" &&
