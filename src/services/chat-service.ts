@@ -38,6 +38,7 @@ const AMBIGUOUS_CORRECTION_ANSWER =
   "Could you clarify which fact or preference you want to update?";
 
 export interface ChatServiceInput {
+  requestId?: string;
   userId: string;
   message: string;
   strategy?: string;
@@ -52,8 +53,9 @@ export interface ContextBreakdown {
   summary?: number;
 }
 
-export interface ChatServiceResult extends Omit<ReasoningResult, "tokenUsage"> {
+export interface ChatServiceResult extends Omit<ReasoningResult, "tokenUsage" | "trace"> {
   conversationId: string;
+  trace: AttributedTraceEvent[];
   metrics: ReasoningResult["metrics"] & {
     historyMessages: number;
     promptTokens?: number;
@@ -149,6 +151,7 @@ export class ChatService {
     const conversationId =
       input.conversationId ?? (await this.conversations.create()).id;
     logEvent("chat.start", {
+      requestId: input.requestId,
       conversationId,
       userId: input.userId,
       strategy: input.strategy ?? "auto",
@@ -161,7 +164,7 @@ export class ChatService {
     );
     const history = selectRecentHistory(newestFirst);
     const { summary, summaryEvents, summaryPromptTokens } =
-      await this.refreshSummary(conversationId);
+      await this.refreshSummary(conversationId, input.requestId);
     let memories: Memory[];
     try {
       memories = this.memoryService
@@ -169,6 +172,7 @@ export class ChatService {
         : [];
     } catch (error) {
       logEvent("memory.failure", {
+        requestId: input.requestId,
         conversationId,
         userId: input.userId,
         error: errorDetail(error),
@@ -176,6 +180,7 @@ export class ChatService {
       throw error;
     }
     logEvent("memory.recalled", {
+      requestId: input.requestId,
       conversationId,
       userId: input.userId,
       facts: memories.length,
@@ -194,6 +199,7 @@ export class ChatService {
       context.sections.map(({ name, tokens }) => [name, tokens]),
     );
     logEvent("context.built", {
+      requestId: input.requestId,
       conversationId,
       totalTokens: context.totalTokens,
       truncated: context.truncatedSections,
@@ -248,6 +254,7 @@ export class ChatService {
         };
       } catch (error) {
         logEvent("strategy.failure", {
+          requestId: input.requestId,
           conversationId,
           strategy: input.strategy ?? "auto",
           error: errorDetail(error),
@@ -293,6 +300,7 @@ export class ChatService {
       aggregateModelUsage(summaryPromptTokens),
     );
     logEvent("chat.completed", {
+      requestId: input.requestId,
       conversationId,
       strategy: input.strategy ?? "auto",
       durationMs: Date.now() - started,
@@ -320,6 +328,7 @@ export class ChatService {
 
   private async refreshSummary(
     conversationId: string,
+    requestId?: string,
   ): Promise<{
     summary: ConversationSummary | null;
     summaryEvents: ReasoningResult["trace"];
@@ -335,6 +344,7 @@ export class ChatService {
       );
     } catch (error) {
       logEvent("summary.load_failure", {
+        requestId,
         conversationId,
         error: errorDetail(error),
       });
@@ -344,6 +354,7 @@ export class ChatService {
       throw new DomainError("Conversation summary could not be loaded", "INTERNAL");
     }
     logEvent("summary.loaded", {
+      requestId,
       conversationId,
       coveredThrough: summary?.coveredThroughMessageId ?? null,
       uncovered: uncovered.length,
@@ -356,6 +367,7 @@ export class ChatService {
       if (!batch) break;
 
       logEvent("summary.batch", {
+        requestId,
         conversationId,
         messages: batch.length,
         firstId: batch[0]?.id,
@@ -369,6 +381,7 @@ export class ChatService {
         });
       } catch (error) {
         logEvent("summary.failure", {
+          requestId,
           conversationId,
           error: errorDetail(error),
         });
@@ -379,6 +392,7 @@ export class ChatService {
         typeof generated?.content === "string" ? generated.content.trim() : "";
       const tokenCount = estimateTokens(content);
       logEvent("summary.generated", {
+        requestId,
         conversationId,
         contentChars: content.length,
         tokens: tokenCount,
@@ -386,6 +400,7 @@ export class ChatService {
       });
       if (!content || tokenCount < 1 || tokenCount > 200) {
         logEvent("summary.invalid", {
+          requestId,
           conversationId,
           contentChars: content.length,
           tokens: tokenCount,
@@ -402,6 +417,7 @@ export class ChatService {
         );
       } catch (error) {
         logEvent("summary.save_failure", {
+          requestId,
           conversationId,
           coveredThrough: coveredThroughMessageId,
           error: errorDetail(error),
@@ -412,6 +428,7 @@ export class ChatService {
         throw new DomainError("Conversation summary update failed", "INTERNAL");
       }
       logEvent("summary.saved", {
+        requestId,
         conversationId,
         coveredThrough: coveredThroughMessageId,
         tokens: tokenCount,

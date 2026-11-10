@@ -21,6 +21,7 @@ async function withChatServer(
     conversationStore: new FakeConversationStore(),
     historyMessagesThreshold: 12,
     memoryService: null,
+    requestTraceService: null,
   }));
   app.use(errorHandler);
   const server = app.listen(0, "127.0.0.1");

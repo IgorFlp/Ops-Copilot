@@ -63,6 +63,7 @@ test("HTTP chat defaults to react and returns the unwrapped reasoning result", a
     conversationStore: conversations,
     historyMessagesThreshold: 12,
     memoryService: null,
+    requestTraceService: null,
   });
 
   await withChatServer(router, async (url) => {
@@ -83,8 +84,12 @@ test("HTTP chat defaults to react and returns the unwrapped reasoning result", a
         contextBreakdown: { currentMessage: number };
       };
       conversationId: string;
+      requestId: string;
     };
-    assert.deepEqual(body, {
+    const { requestId, ...rest } = body;
+    assert.equal(typeof requestId, "string");
+    assert.ok(requestId.length > 0);
+    assert.deepEqual(rest, {
       answer: "react answer",
       trace: [{ type: "answer", content: "react answer" }],
       metrics: {
@@ -107,6 +112,7 @@ test("HTTP chat exposes complete actual prompt usage without internal bookkeepin
     conversationStore: new FakeConversationStore(),
     historyMessagesThreshold: 12,
     memoryService: null,
+    requestTraceService: null,
   });
 
   await withChatServer(router, async (url) => {
@@ -143,6 +149,7 @@ test("HTTP chat selects an explicitly requested registered strategy", async () =
     conversationStore: conversations,
     historyMessagesThreshold: 12,
     memoryService: null,
+    requestTraceService: null,
   });
 
   await withChatServer(router, async (url) => {
@@ -167,8 +174,12 @@ test("HTTP chat selects an explicitly requested registered strategy", async () =
         contextBreakdown: { currentMessage: number };
       };
       conversationId: string;
+      requestId: string;
     };
-    assert.deepEqual(body, {
+    const { requestId, ...rest } = body;
+    assert.equal(typeof requestId, "string");
+    assert.ok(requestId.length > 0);
+    assert.deepEqual(rest, {
       answer: "plan-and-execute answer",
       trace: [{ type: "answer", content: "plan-and-execute answer" }],
       metrics: {
@@ -194,6 +205,7 @@ test("HTTP chat continues an existing conversation with ordered history", async 
     conversationStore: conversations,
     historyMessagesThreshold: 12,
     memoryService: null,
+    requestTraceService: null,
   });
 
   await withChatServer(router, async (url) => {
@@ -239,6 +251,7 @@ test("HTTP chat recalls user-scoped facts without putting userId in the prompt",
         }];
       },
     },
+    requestTraceService: null,
   });
 
   await withChatServer(router, async (url) => {
@@ -265,6 +278,7 @@ test("HTTP chat rejects unknown conversation identifiers without creating replac
     conversationStore: conversations,
     historyMessagesThreshold: 12,
     memoryService: null,
+    requestTraceService: null,
   });
 
   await withChatServer(router, async (url) => {
