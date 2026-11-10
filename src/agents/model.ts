@@ -1,5 +1,13 @@
 import { DomainError } from "../errors/domain-error.js";
 import { ChatOpenAI } from "@langchain/openai";
+import {
+  createResilientModel,
+  loadModelConfiguration,
+  type ModelConfiguration,
+  type RetryConfig,
+  type ModelAttempt,
+  type ResilientModelResult,
+} from "./model.resilience.js";
 
 export function createModel(options: { maxTokens?: number } = {}): ChatOpenAI {
   const apiKey = process.env.OPENROUTER_API_KEY?.trim();
@@ -21,3 +29,12 @@ export function createModel(options: { maxTokens?: number } = {}): ChatOpenAI {
       : { maxTokens: options.maxTokens }),
   });
 }
+
+export {
+  createResilientModel,
+  loadModelConfiguration,
+  type ModelConfiguration,
+  type RetryConfig,
+  type ModelAttempt,
+  type ResilientModelResult,
+};
