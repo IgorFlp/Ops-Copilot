@@ -1,6 +1,7 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { DomainError } from "../errors/domain-error.js";
+import { errorDetail, logEvent } from "../lib/log.js";
 import { getDefaultMemoryService } from "../memory/memory-store.js";
 import {
   createIncidentService,
@@ -95,6 +96,14 @@ const forgetPreferenceInputSchema = z.object({
     .describe("The specific saved preference the current user wants forgotten."),
 }).strict();
 
+type ListAlertsArgs = z.infer<typeof listAlertsInputSchema>;
+type OpenIncidentArgs = z.infer<typeof openIncidentInputSchema>;
+type ResolveIncidentArgs = z.infer<typeof resolveIncidentInputSchema>;
+type ListIncidentsArgs = z.infer<typeof listIncidentsInputSchema>;
+type RunbookArgs = z.infer<typeof runbookInputSchema>;
+type ProviderStatusArgs = z.infer<typeof providerStatusInputSchema>;
+type ForgetPreferenceArgs = z.infer<typeof forgetPreferenceInputSchema>;
+
 export interface MemoryToolContext {
   userId: string;
   memoryService: Pick<MemoryService, "forgetPreference">;
@@ -111,6 +120,61 @@ function stableValue(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value) ?? String(value);
+}
+
+function summarizeToolArgs(args: unknown): Record<string, unknown> {
+  if (typeof args !== "object" || args === null) return {};
+  const summary: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value === "string") {
+      summary[key] = value.length > 80 ? `${value.slice(0, 80)}...` : value;
+    } else if (
+      value === undefined ||
+      value === null ||
+      typeof value === "number" ||
+      typeof value === "boolean"
+    ) {
+      summary[key] = value;
+    } else {
+      summary[key] = Array.isArray(value)
+        ? `array(${value.length})`
+        : typeof value;
+    }
+  }
+  return summary;
+}
+
+function loggedTool<TArgs, TResult>(
+  name: string,
+  userId: string | undefined,
+  handler: (args: TArgs) => Promise<TResult>,
+): (args: TArgs) => Promise<TResult> {
+  return async (args) => {
+    const started = Date.now();
+    logEvent("tool.start", {
+      tool: name,
+      userId,
+      args: summarizeToolArgs(args),
+    });
+    try {
+      const result = await handler(args);
+      logEvent("tool.success", {
+        tool: name,
+        userId,
+        durationMs: Date.now() - started,
+        resultChars: typeof result === "string" ? result.length : undefined,
+      });
+      return result;
+    } catch (error) {
+      logEvent("tool.failure", {
+        tool: name,
+        userId,
+        durationMs: Date.now() - started,
+        error: errorDetail(error),
+      });
+      throw error;
+    }
+  };
 }
 
 function canonicalActionArgs(
@@ -166,10 +230,15 @@ export function createOpsTools(
 ) {
   const service = () =>
     createIncidentService(store ?? getDefaultOpsStore());
+  const toolUserId = memoryContext?.userId;
 
   const listAlerts = tool(
-    async ({ status }) =>
-      JSON.stringify(await service().listAlerts(status)),
+    loggedTool(
+      "list_alerts",
+      toolUserId,
+      async ({ status }: ListAlertsArgs) =>
+        JSON.stringify(await service().listAlerts(status)),
+    ),
     {
       name: "list_alerts",
       description:
@@ -179,23 +248,32 @@ export function createOpsTools(
   );
 
   const openIncident = tool(
-    async ({ title, service: serviceSlug, severity, summary }) => {
-      const args = { title, service: serviceSlug, severity, summary };
-      const previous = priorMutationObservation(
-        completedActions,
-        "open_incidente",
-        args,
-      );
-      if (previous !== undefined) return previous;
-      return JSON.stringify(
-        await service().openIncident({
-          title,
-          service: serviceSlug,
-          severity,
-          summary,
-        }),
-      );
-    },
+    loggedTool(
+      "open_incidente",
+      toolUserId,
+      async ({
+        title,
+        service: serviceSlug,
+        severity,
+        summary,
+      }: OpenIncidentArgs) => {
+        const args = { title, service: serviceSlug, severity, summary };
+        const previous = priorMutationObservation(
+          completedActions,
+          "open_incidente",
+          args,
+        );
+        if (previous !== undefined) return previous;
+        return JSON.stringify(
+          await service().openIncident({
+            title,
+            service: serviceSlug,
+            severity,
+            summary,
+          }),
+        );
+      },
+    ),
     {
       name: "open_incidente",
       description:
@@ -205,16 +283,20 @@ export function createOpsTools(
   );
 
   const resolveIncident = tool(
-    async ({ id }) => {
-      const args = { id };
-      const previous = priorMutationObservation(
-        completedActions,
-        "resolve_incidente",
-        args,
-      );
-      if (previous !== undefined) return previous;
-      return JSON.stringify(await service().resolveIncident(id));
-    },
+    loggedTool(
+      "resolve_incidente",
+      toolUserId,
+      async ({ id }: ResolveIncidentArgs) => {
+        const args = { id };
+        const previous = priorMutationObservation(
+          completedActions,
+          "resolve_incidente",
+          args,
+        );
+        if (previous !== undefined) return previous;
+        return JSON.stringify(await service().resolveIncident(id));
+      },
+    ),
     {
       name: "resolve_incidente",
       description:
@@ -224,8 +306,12 @@ export function createOpsTools(
   );
 
   const listIncidents = tool(
-    async ({ status }) =>
-      JSON.stringify(await service().listIncidents(status)),
+    loggedTool(
+      "List_incidentes",
+      toolUserId,
+      async ({ status }: ListIncidentsArgs) =>
+        JSON.stringify(await service().listIncidents(status)),
+    ),
     {
       name: "List_incidentes",
       description:
@@ -235,8 +321,12 @@ export function createOpsTools(
   );
 
   const consultRunbook = tool(
-    async ({ service: serviceReference }) =>
-      JSON.stringify(await service().getRunbook(serviceReference)),
+    loggedTool(
+      "consultar_runbook",
+      toolUserId,
+      async ({ service: serviceReference }: RunbookArgs) =>
+        JSON.stringify(await service().getRunbook(serviceReference)),
+    ),
     {
       name: "consultar_runbook",
       description:
@@ -246,7 +336,12 @@ export function createOpsTools(
   );
 
   const checkProviderStatus = tool(
-    async ({ provider }) => fetchProviderStatus(provider, doFetch),
+    loggedTool(
+      "check_provider_status",
+      toolUserId,
+      async ({ provider }: ProviderStatusArgs) =>
+        fetchProviderStatus(provider, doFetch),
+    ),
     {
       name: "check_provider_status",
       description:
@@ -268,13 +363,17 @@ export function createOpsTools(
     throw new DomainError("userId must not be empty", "VALIDATION");
   }
   const forgetPreference = tool(
-    async ({ preference }) =>
-      JSON.stringify(
-        await memoryContext.memoryService.forgetPreference(
-          memoryContext.userId,
-          preference,
+    loggedTool(
+      "forget_preference",
+      toolUserId,
+      async ({ preference }: ForgetPreferenceArgs) =>
+        JSON.stringify(
+          await memoryContext.memoryService.forgetPreference(
+            memoryContext.userId,
+            preference,
+          ),
         ),
-      ),
+    ),
     {
       name: "forget_preference",
       description:
