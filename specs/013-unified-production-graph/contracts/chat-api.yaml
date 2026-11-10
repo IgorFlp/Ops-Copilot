@@ -1,0 +1,384 @@
+# Chat API Contract
+openapi: 3.1.0
+info:
+  title: OpsCopilot Chat API
+  version: 2.0.0
+  description: |
+    Unified production chat endpoint with automatic strategy routing.
+    Supports explicit strategy override and legacy reflection flag.
+
+servers:
+  - url: http://localhost:3000
+    description: Local development server
+
+paths:
+  /chat:
+    post:
+      summary: Send a chat message and receive a response with trace
+      operationId: chat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: Successful response with answer and trace
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatResponse'
+        '400':
+          description: Invalid request body or unsupported strategy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '408':
+          description: Request timeout
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    ChatRequest:
+      type: object
+      required:
+        - userId
+        - message
+      properties:
+        userId:
+          type: string
+          minLength: 1
+          description: Unique identifier for the user
+          example: "user-123"
+        message:
+          type: string
+          minLength: 1
+          description: The user's message
+          example: "List all critical alerts for the checkout service"
+        strategy:
+          type: string
+          enum:
+            - react
+            - plan-and-execute
+            - reflect:react
+          description: |
+            Optional explicit strategy override. When omitted, the router
+            automatically selects a strategy. When provided, bypasses the router.
+          example: "plan-and-execute"
+        reflect:
+          type: boolean
+          default: false
+          description: |
+            Legacy flag. When true and no explicit strategy is provided,
+            selects the reflected ReAct strategy (reflect:react).
+            Explicit strategy takes precedence.
+          example: false
+        conversationId:
+          type: string
+          minLength: 1
+          description: Optional existing conversation identifier
+          example: "conv-456"
+      additionalProperties: false
+
+    ChatResponse:
+      type: object
+      required:
+        - answer
+        - trace
+        - metrics
+        - conversationId
+      properties:
+        answer:
+          type: string
+          description: The assistant's final answer
+          example: "Found 3 critical alerts for checkout service..."
+        trace:
+          type: array
+          description: |
+            Sequence of trace events with node attribution. Every event
+            includes a `node` field identifying its origin.
+          items:
+            $ref: '#/components/schemas/TraceEvent'
+        metrics:
+          $ref: '#/components/schemas/ChatMetrics'
+        conversationId:
+          type: string
+          description: Conversation identifier (new or existing)
+          example: "conv-456"
+
+    TraceEvent:
+      type: object
+      required:
+        - type
+        - content
+        - node
+      properties:
+        type:
+          type: string
+          enum:
+            - thought
+            - action
+            - observation
+            - plan
+            - critique
+            - answer
+            - summarize
+            - route
+          description: Event type classification
+        content:
+          type: string
+          description: Human-readable event content
+        node:
+          type: string
+          enum:
+            - context
+            - route
+            - react
+            - plan-and-execute
+            - reflect:react
+            - summary
+          description: |
+            Graph node that produced this event. Required on all events.
+        timestamp:
+          type: string
+          format: date-time
+          description: Event timestamp (ISO 8601)
+        tools:
+          type: array
+          items:
+            type: string
+          description: Tool names involved (for action/observation events)
+        args:
+          type: object
+          additionalProperties: true
+          description: Tool arguments (for action events)
+        approved:
+          type: boolean
+          description: Critic approval status (for critique events)
+      additionalProperties: false
+
+    RouteEvent:
+      allOf:
+        - $ref: '#/components/schemas/TraceEvent'
+        - type: object
+          description: |
+            Specialized trace event for routing decisions (type === "route").
+            Content contains JSON with route and reason.
+          properties:
+            type:
+              type: string
+              const: route
+            content:
+              type: string
+              description: JSON string with { route, reason }
+              example: '{"route":"plan-and-execute","reason":"Multi-step operational task requiring explicit planning"}'
+            node:
+              type: string
+              const: route
+
+    ChatMetrics:
+      type: object
+      required:
+        - calls
+        - latencyMs
+        - historyMessages
+        - contextBreakdown
+      properties:
+        calls:
+          type: integer
+          minimum: 0
+          description: Total model calls across routing and strategy
+        latencyMs:
+          type: integer
+          minimum: 0
+          description: Total latency in milliseconds
+        promptTokens:
+          type: integer
+          minimum: 0
+          description: Total prompt tokens (optional)
+        historyMessages:
+          type: integer
+          minimum: 0
+          description: Number of history messages included in context
+        contextBreakdown:
+          type: object
+          required:
+            - currentMessage
+          properties:
+            currentMessage:
+              type: integer
+              minimum: 0
+              description: Token estimate for current user message
+            history:
+              type: integer
+              minimum: 0
+              description: Token estimate for conversation history
+            memories:
+              type: integer
+              minimum: 0
+              description: Token estimate for recalled memories
+            summary:
+              type: integer
+              minimum: 0
+              description: Token estimate for conversation summary
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+              enum:
+                - VALIDATION
+                - UNSUPPORTED_STRATEGY
+                - NOT_FOUND
+                - TIMEOUT
+                - INTERNAL
+                - CONFIGURATION
+              description: Machine-readable error code
+            message:
+              type: string
+              description: Human-readable error message
+            details:
+              type: object
+              additionalProperties: true
+              description: Optional additional error context
+      additionalProperties: false
+
+  examples:
+    AutomaticRoutingRequest:
+      summary: Request without strategy (automatic routing)
+      value:
+        userId: "user-123"
+        message: "What are the critical alerts for checkout?"
+
+    ExplicitStrategyRequest:
+      summary: Request with explicit strategy override
+      value:
+        userId: "user-123"
+        message: "Create a plan to resolve the checkout incident"
+        strategy: "plan-and-execute"
+
+    LegacyReflectRequest:
+      summary: Request with legacy reflect flag (no strategy)
+      value:
+        userId: "user-123"
+        message: "Analyze the incident and reflect on the answer"
+        reflect: true
+
+    AutomaticRoutingResponse:
+      summary: Response with automatic routing trace
+      value:
+        answer: "Found 2 critical alerts for checkout service..."
+        trace:
+          - type: "context"
+            content: "System prompt + history + memories + user message"
+            node: "context"
+            timestamp: "2026-11-09T10:00:00.000Z"
+          - type: "route"
+            content: '{"route":"react","reason":"Simple lookup query, single tool call sufficient"}'
+            node: "route"
+            timestamp: "2026-11-09T10:00:01.000Z"
+          - type: "action"
+            content: "Requested operational tool execution"
+            node: "react"
+            tools: ["list_alerts"]
+            args: { "status": "firing" }
+            timestamp: "2026-11-09T10:00:02.000Z"
+          - type: "observation"
+            content: "[{\"id\":1,\"service\":\"checkout\",\"severity\":\"critical\"}]"
+            node: "react"
+            tools: ["list_alerts"]
+            timestamp: "2026-11-09T10:00:03.000Z"
+          - type: "answer"
+            content: "Found 2 critical alerts for checkout service..."
+            node: "react"
+            timestamp: "2026-11-09T10:00:04.000Z"
+        metrics:
+          calls: 3
+          latencyMs: 4500
+          promptTokens: 1250
+          historyMessages: 5
+          contextBreakdown:
+            currentMessage: 45
+            history: 320
+            memories: 150
+            summary: 200
+        conversationId: "conv-456"
+
+    ExplicitOverrideResponse:
+      summary: Response with explicit strategy override trace
+      value:
+        answer: "Plan created with 4 steps..."
+        trace:
+          - type: "context"
+            content: "System prompt + history + memories + user message"
+            node: "context"
+            timestamp: "2026-11-09T10:00:00.000Z"
+          - type: "route"
+            content: '{"route":"plan-and-execute","reason":"Explicit override: plan-and-execute"}'
+            node: "route"
+            timestamp: "2026-11-09T10:00:01.000Z"
+          - type: "plan"
+            content: "1. List alerts\n2. Open incident\n3. Resolve incident"
+            node: "plan-and-execute"
+            timestamp: "2026-11-09T10:00:02.000Z"
+          - type: "action"
+            content: "List alerts"
+            node: "plan-and-execute"
+            tools: ["list_alerts"]
+            timestamp: "2026-11-09T10:00:03.000Z"
+        metrics:
+          calls: 4
+          latencyMs: 6200
+          historyMessages: 3
+          contextBreakdown:
+            currentMessage: 50
+            history: 200
+            memories: 0
+            summary: 180
+        conversationId: "conv-789"
+
+    UnsupportedStrategyError:
+      summary: Error response for unsupported strategy
+      value:
+        error:
+          code: "UNSUPPORTED_STRATEGY"
+          message: "Unknown strategy: invalid-strategy"
+          details:
+            supportedStrategies:
+              - "react"
+              - "plan-and-execute"
+              - "reflect:react"
+
+    InvalidRouterOutputError:
+      summary: Error response for invalid router output (500)
+      value:
+        error:
+          code: "UNSUPPORTED_STRATEGY"
+          message: "Router returned invalid route: unknown-strategy"
+          details: {}
