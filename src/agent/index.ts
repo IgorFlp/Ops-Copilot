@@ -3,7 +3,7 @@ import type { IncidentServiceStore } from "../services/incident-service.js";
 import { createPlanAndExecuteStrategy } from "../agents/plan-and-execute.js";
 import { createReactStrategy } from "../agents/react.js";
 import { withReflection } from "../agents/reflection.js";
-import type { ReasoningStrategy } from "../agents/types.js";
+import type { ReasoningStrategy, StrategyId } from "../agents/types.js";
 import { DomainError } from "../errors/domain-error.js";
 
 export type ReflectionDecorator = (
@@ -17,6 +17,7 @@ export interface ResolvedStrategy {
 
 export interface StrategyRegistry {
   resolve(name?: string, reflect?: boolean): ResolvedStrategy;
+  getStrategy(name: StrategyId): ReasoningStrategy | undefined;
 }
 
 export function createOperationalStrategies(
@@ -42,7 +43,7 @@ export function createStrategyRegistry(
     byName.set(strategy.name, strategy);
   }
 
-  return {
+  const baseRegistry = {
     resolve(name = "react", reflect = false): ResolvedStrategy {
       const strategy = byName.get(name);
       if (!strategy) {
@@ -56,7 +57,16 @@ export function createStrategyRegistry(
         reflected: reflect,
       };
     },
+    getStrategy(name: StrategyId): ReasoningStrategy | undefined {
+      return byName.get(name);
+    },
   };
+
+  return baseRegistry;
 }
 
 export const strategyRegistry = createStrategyRegistry();
+
+export type { StrategyId } from "../agents/types.js";
+export type { GraphState, RouteDecision, SelectionSource, AttributedTraceEvent, TraceNodeId } from "../agents/types.js";
+export { createProductionGraph, type ProductionGraph } from "./production-graph.js";
