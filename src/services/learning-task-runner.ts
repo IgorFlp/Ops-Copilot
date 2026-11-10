@@ -1,3 +1,5 @@
+import { errorDetail, logEvent } from "../lib/log.js";
+
 export type LearningTask = () => Promise<void>;
 export type LearningFailureReporter = (message: string) => void;
 
@@ -14,10 +16,21 @@ export class LearningTaskRunner {
   ) {}
 
   schedule(task: LearningTask): void {
+    const started = Date.now();
+    logEvent("learning.task.start");
     let tracked!: Promise<void>;
     tracked = Promise.resolve()
       .then(task)
-      .catch(() => {
+      .then(() => {
+        logEvent("learning.task.success", {
+          durationMs: Date.now() - started,
+        });
+      })
+      .catch((error: unknown) => {
+        logEvent("learning.task.failure", {
+          durationMs: Date.now() - started,
+          error: errorDetail(error),
+        });
         try {
           this.reportFailure("[opspilot] learning task failed");
         } catch {

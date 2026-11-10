@@ -4,6 +4,7 @@ import type {
   LearningExtractor,
 } from "../agents/learning-reflector.js";
 import { correctionResolutionSchema, parseLearningResult } from "../agents/learning-reflector.js";
+import { logEvent } from "../lib/log.js";
 import type { Memory } from "./memory-service.js";
 
 export interface LearningMemoryService {
@@ -76,6 +77,7 @@ export function createLearningReflector(
     ) {
       return { kind: "none" };
     }
+    logEvent("learning.correction_detected", { userId });
 
     const candidate = parseLearningResult(
       await extract(latestUserMessage),
@@ -117,32 +119,60 @@ export function createLearningReflector(
       if (!userId.trim() || !latestUserMessage.trim()) {
         throw new TypeError("userId and latestUserMessage must not be empty");
       }
-      if (correction?.kind === "ambiguous") return;
+      logEvent("learning.learn.start", {
+        userId,
+        messageChars: latestUserMessage.length,
+        correction: correction?.kind ?? "none",
+      });
+      if (correction?.kind === "ambiguous") {
+        logEvent("learning.skipped", { reason: "ambiguous_correction" });
+        return;
+      }
       const preparedCorrection =
         correction ??
         (isExplicitCorrection(latestUserMessage)
           ? await prepareCorrection(userId, latestUserMessage)
           : undefined);
-      if (preparedCorrection?.kind === "ambiguous") return;
+      if (preparedCorrection?.kind === "ambiguous") {
+        logEvent("learning.skipped", { reason: "ambiguous_correction" });
+        return;
+      }
       if (preparedCorrection?.kind === "replace") {
         await memory.replace(
           userId,
           preparedCorrection.memoryId,
           preparedCorrection.fact,
         );
+        logEvent("learning.replaced", {
+          userId,
+          memoryId: preparedCorrection.memoryId,
+        });
         return;
       }
-      if (containsSensitiveCredential(latestUserMessage)) return;
+      if (containsSensitiveCredential(latestUserMessage)) {
+        logEvent("learning.skipped", { reason: "sensitive_message" });
+        return;
+      }
 
       const candidate = parseLearningResult(
         await extract(latestUserMessage),
       );
       if (!candidate.hasLearning || containsSensitiveCredential(candidate.fact)) {
+        logEvent("learning.skipped", {
+          reason: candidate.hasLearning ? "sensitive_fact" : "no_learning",
+        });
         return;
       }
-      if (isExplicitCorrection(latestUserMessage)) return;
+      if (isExplicitCorrection(latestUserMessage)) {
+        logEvent("learning.skipped", { reason: "explicit_correction" });
+        return;
+      }
 
       await memory.remember(userId, candidate.fact);
+      logEvent("learning.remembered", {
+        userId,
+        factChars: candidate.fact.length,
+      });
     },
   };
 }
