@@ -82,4 +82,24 @@ describe("ChatPage", () => {
       screen.getByRole("button", { name: "Tentar novamente" }),
     ).toBeInTheDocument();
   });
+
+  it("sends the selected route with the message", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, chatSuccess, { "X-Request-Id": "req-0001" }),
+    );
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.selectOptions(
+      screen.getByLabelText("Rota de raciocínio"),
+      "team",
+    );
+    await user.type(screen.getByLabelText("Mensagem"), "coordene o plantão");
+    await user.click(screen.getByRole("button", { name: "Enviar mensagem" }));
+
+    await screen.findByText(chatSuccess.answer);
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    const body = JSON.parse(String(init.body)) as { strategy?: string };
+    expect(body.strategy).toBe("team");
+  });
 });

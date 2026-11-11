@@ -130,4 +130,34 @@ describe("useChat", () => {
     expect(result.current.pending?.status).toBe("failed");
     expect(result.current.pending?.error).toBeTruthy();
   });
+
+  it("forwards the selected strategy in the request", async () => {
+    const chat = vi.fn().mockResolvedValue({ kind: "answer", response: chatSuccess });
+    const client = makeClient({ chat });
+    const { result } = renderHook(() =>
+      useChat({ client, userId: "operator-1", strategy: "team" }),
+    );
+
+    await act(async () => {
+      await result.current.send("coordene o plantão");
+    });
+
+    expect(chat).toHaveBeenCalledWith(
+      expect.objectContaining({ strategy: "team" }),
+    );
+  });
+
+  it("omits the strategy when auto is selected", async () => {
+    const chat = vi.fn().mockResolvedValue({ kind: "answer", response: chatSuccess });
+    const client = makeClient({ chat });
+    const { result } = renderHook(() =>
+      useChat({ client, userId: "operator-1", strategy: "auto" }),
+    );
+
+    await act(async () => {
+      await result.current.send("oi");
+    });
+
+    expect(chat.mock.calls[0][0]).not.toHaveProperty("strategy");
+  });
 });

@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { ApiClient } from "../lib/api-client";
 import { ApiError } from "../lib/errors";
-import type { ChatMessage } from "../types/chat";
+import type { ChatMessage, Strategy } from "../types/chat";
 import type {
   ApprovalDecision,
   PendingApprovalState,
@@ -10,6 +10,7 @@ import type {
 export interface UseChatOptions {
   client: ApiClient;
   userId: string;
+  strategy?: Strategy | "auto";
 }
 
 export interface UseChatResult {
@@ -35,7 +36,11 @@ function toApiError(error: unknown): ApiError {
   return new ApiError(0, "INTERNAL", "Something went wrong. Try again.");
 }
 
-export function useChat({ client, userId }: UseChatOptions): UseChatResult {
+export function useChat({
+  client,
+  userId,
+  strategy,
+}: UseChatOptions): UseChatResult {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
@@ -52,6 +57,7 @@ export function useChat({ client, userId }: UseChatOptions): UseChatResult {
           userId,
           message: text,
           conversationId: conversationIdRef.current,
+          ...(strategy && strategy !== "auto" ? { strategy } : {}),
         });
 
         lastFailedRef.current = null;
@@ -111,7 +117,7 @@ export function useChat({ client, userId }: UseChatOptions): UseChatResult {
         setSending(false);
       }
     },
-    [client, userId],
+    [client, userId, strategy],
   );
 
   const send = useCallback(
