@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { ApprovalCard } from "../components/approval/ApprovalCard";
 import { ChatComposer } from "../components/chat/ChatComposer";
 import { MessageList } from "../components/chat/MessageList";
+import { StrategySelect } from "../components/chat/StrategySelect";
 import { TracePanel } from "../components/trace/TracePanel";
 import { Button } from "../components/ui/Button";
 import { EmptyState } from "../components/ui/EmptyState";
@@ -9,6 +10,7 @@ import { ErrorState } from "../components/ui/ErrorState";
 import { Spinner } from "../components/ui/Spinner";
 import { useApiConfig } from "../hooks/useApiConfig";
 import { useChat } from "../hooks/useChat";
+import { useStrategy } from "../hooks/useStrategy";
 import { createApiClient } from "../lib/api-client";
 import { DEFAULT_USER_ID } from "../lib/config";
 import type { TraceEvent } from "../types/trace";
@@ -16,6 +18,7 @@ import type { TraceEvent } from "../types/trace";
 export function ChatPage() {
   const { baseUrl } = useApiConfig();
   const client = useMemo(() => createApiClient(() => baseUrl), [baseUrl]);
+  const { strategy, setStrategy } = useStrategy();
   const {
     messages,
     sending,
@@ -25,7 +28,7 @@ export function ChatPage() {
     retry,
     decide,
     clearError,
-  } = useChat({ client, userId: DEFAULT_USER_ID });
+  } = useChat({ client, userId: DEFAULT_USER_ID, strategy });
   const [trace, setTrace] = useState<TraceEvent[] | null>(null);
 
   const canRetry = messages.some(
@@ -73,6 +76,12 @@ export function ChatPage() {
           }
         />
       ) : null}
+
+      <StrategySelect
+        value={strategy}
+        onChange={setStrategy}
+        disabled={sending}
+      />
 
       <ChatComposer onSend={send} disabled={sending} />
 

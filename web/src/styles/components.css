@@ -323,6 +323,10 @@
   min-height: 44px;
 }
 
+.composer__strategy {
+  max-width: 320px;
+}
+
 /* Metrics */
 .metrics {
   display: flex;
