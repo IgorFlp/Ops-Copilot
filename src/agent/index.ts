@@ -3,6 +3,7 @@ import type { IncidentServiceStore } from "../services/incident-service.js";
 import { createPlanAndExecuteStrategy } from "../agents/plan-and-execute.js";
 import { createReactStrategy } from "../agents/react.js";
 import { withReflection } from "../agents/reflection.js";
+import { createTeamStrategy } from "../team/team-strategy.js";
 import type { ReasoningStrategy, StrategyId } from "../agents/types.js";
 import { DomainError } from "../errors/domain-error.js";
 
@@ -65,7 +66,10 @@ export function createStrategyRegistry(
   return baseRegistry;
 }
 
-export const strategyRegistry = createStrategyRegistry();
+export const strategyRegistry = createStrategyRegistry([
+  ...defaultStrategies,
+  createTeamStrategy(),
+]);
 
 export type { StrategyId } from "../agents/types.js";
 export type { GraphState, RouteDecision, SelectionSource, AttributedTraceEvent, TraceNodeId } from "../agents/types.js";
