@@ -1,6 +1,7 @@
 export const STORAGE_KEYS = {
   apiBaseUrl: "opspilot.apiBaseUrl.v1",
   theme: "opspilot.theme.v1",
+  strategy: "opspilot.strategy.v1",
 } as const;
 
 export function readStorage(key: string): string | null {
