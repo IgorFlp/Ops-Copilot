@@ -22,7 +22,8 @@ export type TraceEventType =
   | "summarize"
   | "route"
   | "context"
-  | "fallback";
+  | "fallback"
+  | "handoff";
 
 export interface TraceEvent {
   type: TraceEventType;
@@ -31,7 +32,12 @@ export interface TraceEvent {
   tools?: string[];
   args?: Record<string, unknown>;
   approved?: boolean;
+  from?: string;
+  to?: string;
+  brief?: string;
 }
+
+export type TeamRoleId = "analista" | "planejador" | "executor";
 
 export type TraceNodeId =
   | "context"
@@ -39,7 +45,8 @@ export type TraceNodeId =
   | "react"
   | "plan-and-execute"
   | "reflect:react"
-  | "summary";
+  | "summary"
+  | "team";
 
 export interface AttributedTraceEvent extends TraceEvent {
   node: TraceNodeId;
@@ -72,7 +79,7 @@ export interface FallbackTraceEvent extends TraceEvent {
   attemptSummary: ModelAttemptSummary;
 }
 
-export type StrategyId = "react" | "plan-and-execute" | "reflect:react";
+export type StrategyId = "react" | "plan-and-execute" | "reflect:react" | "team";
 
 export interface RouteDecision {
   route: StrategyId;
