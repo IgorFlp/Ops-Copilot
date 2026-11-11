@@ -18,7 +18,7 @@ import { strategyRegistry } from "./index.js";
 import { withReflection } from "../agents/reflection.js";
 
 const routeSchema = z.object({
-  route: z.enum(["react", "plan-and-execute", "reflect:react"]),
+  route: z.enum(["react", "plan-and-execute", "reflect:react", "team"]),
   reason: z.string().min(1, "Reason must not be empty"),
 });
 
@@ -32,9 +32,10 @@ Available strategies:
 | ReAct | react | Single-step lookup or simple operational queries using tools directly |
 | Plan-and-Execute | plan-and-execute | Multi-step operational tasks requiring explicit planning, sequencing, or incident mutation |
 | ReAct with Reflection | reflect:react | Complex analysis requiring self-critique and iterative refinement of the answer |
+| Team | team | Complex operational work that benefits from coordinated specialist roles (analysis, planning, execution) |
 
 Return a JSON object with exactly two fields:
-- "route": one of "react", "plan-and-execute", "reflect:react"
+- "route": one of "react", "plan-and-execute", "reflect:react", "team"
 - "reason": a brief explanation for your choice (minimum 1 character)`;
 
 function createAttributedEvent(
@@ -215,10 +216,12 @@ async function createGraph(
   const planAndExecuteStrategy = strategies?.get("plan-and-execute") ?? strategyRegistry.getStrategy("plan-and-execute")!;
   const baseReactStrategy = strategies?.get("react") ?? strategyRegistry.getStrategy("react")!;
   const reflectReactStrategy = strategies?.get("reflect:react") ?? withReflection(baseReactStrategy);
+  const teamStrategy = strategies?.get("team") ?? strategyRegistry.getStrategy("team")!;
 
   const reactNode = await createStrategyNode(reactStrategy, "react");
   const planExecuteNode = await createStrategyNode(planAndExecuteStrategy, "plan-and-execute");
   const reflectNode = await createStrategyNode(reflectReactStrategy, "reflect:react");
+  const teamNode = await createStrategyNode(teamStrategy, "team");
 
   const graph = new StateGraph(GraphStateAnnotation)
     .addNode("contexto", contextNode)
@@ -227,6 +230,7 @@ async function createGraph(
     .addNode("react", reactNode)
     .addNode("planExecute", planExecuteNode)
     .addNode("reflect", reflectNode)
+    .addNode("team", teamNode)
     .addEdge(START, "contexto")
     .addConditionalEdges(
       "contexto",
@@ -248,6 +252,7 @@ async function createGraph(
         react: "react",
         "plan-and-execute": "planExecute",
         "reflect:react": "reflect",
+        team: "team",
       },
     )
     .addConditionalEdges(
@@ -257,11 +262,13 @@ async function createGraph(
         react: "react",
         "plan-and-execute": "planExecute",
         "reflect:react": "reflect",
+        team: "team",
       },
     )
     .addEdge("react", END)
     .addEdge("planExecute", END)
     .addEdge("reflect", END)
+    .addEdge("team", END)
     .compile();
 
   return graph;
