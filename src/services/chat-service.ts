@@ -244,7 +244,7 @@ export class ChatService {
         const initialState = {
           input: strategyInput,
           selectionSource: input.strategy ? "override" : input.reflect ? "reflect" : "auto",
-          selectedStrategy: input.strategy as "react" | "plan-and-execute" | "reflect:react" | undefined,
+          selectedStrategy: input.strategy as "react" | "plan-and-execute" | "reflect:react" | "team" | undefined,
         };
         const result = await graph.invoke(initialState);
         graphResult = {

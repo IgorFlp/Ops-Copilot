@@ -11,6 +11,7 @@ import {
 import { createStrategyRegistry } from "../agent/index.js";
 import { errorHandler } from "../middleware/error-handler.js";
 import { createChatRouter } from "../routes/chat-routes.js";
+import { parseChatRequest } from "./chat-controller.js";
 import { FakeConversationStore } from "./chat-test-helpers.js";
 
 function fakeStrategy(
@@ -297,4 +298,24 @@ test("HTTP chat rejects unknown conversation identifiers without creating replac
     });
   });
   assert.equal(conversations.conversations.size, 0);
+});
+
+test("registers and resolves the team strategy", () => {
+  const registry = createStrategyRegistry([fakeStrategy("team", [])]);
+  assert.equal(registry.resolve("team").strategy.name, "team");
+});
+
+test("accepts the team strategy at the request boundary", () => {
+  const parsed = parseChatRequest({
+    userId: "operator-1",
+    message: "Coordene o plantão",
+    strategy: "team",
+  });
+  assert.equal(parsed.strategy, "team");
+});
+
+test("rejects an unknown strategy at the request boundary", () => {
+  assert.throws(() =>
+    parseChatRequest({ userId: "operator-1", message: "oi", strategy: "nope" }),
+  );
 });

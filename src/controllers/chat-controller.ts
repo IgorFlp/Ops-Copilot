@@ -56,7 +56,7 @@ const chatRequestSchema = z
     userId: z.string().trim().min(1),
     message: z.string().trim().min(1),
     strategy: z
-      .enum(["react", "plan-and-execute", "reflect:react"])
+      .enum(["react", "plan-and-execute", "reflect:react", "team"])
       .optional(),
     reflect: z.boolean().default(false),
     conversationId: z.string().trim().min(1).optional(),
