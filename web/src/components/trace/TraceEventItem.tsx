@@ -11,6 +11,7 @@ const TYPE_LABELS: Record<string, string> = {
   route: "Roteamento",
   context: "Contexto",
   fallback: "Fallback",
+  handoff: "Handoff",
 };
 
 export interface TraceEventItemProps {
@@ -26,7 +27,11 @@ export function TraceEventItem({ event }: TraceEventItemProps) {
   const hasTools = (event.tools?.length ?? 0) > 0;
   const hasArgs = event.args !== undefined;
   const hasApproval = event.approved !== undefined;
-  const hasDetails = hasTools || hasArgs || hasApproval;
+  const hasHandoff =
+    event.from !== undefined ||
+    event.to !== undefined ||
+    event.brief !== undefined;
+  const hasDetails = hasTools || hasArgs || hasApproval || hasHandoff;
 
   return (
     <li className="trace-event">
@@ -56,6 +61,24 @@ export function TraceEventItem({ event }: TraceEventItemProps) {
             <>
               <dt>Aprovado</dt>
               <dd>{String(event.approved)}</dd>
+            </>
+          ) : null}
+          {event.from !== undefined ? (
+            <>
+              <dt>De</dt>
+              <dd>{event.from}</dd>
+            </>
+          ) : null}
+          {event.to !== undefined ? (
+            <>
+              <dt>Para</dt>
+              <dd>{event.to}</dd>
+            </>
+          ) : null}
+          {event.brief !== undefined ? (
+            <>
+              <dt>Brief</dt>
+              <dd>{event.brief}</dd>
             </>
           ) : null}
         </dl>

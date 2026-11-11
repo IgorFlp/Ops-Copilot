@@ -11,6 +11,7 @@ export const TRACE_EVENT_TYPES = [
   "route",
   "context",
   "fallback",
+  "handoff",
 ] as const;
 
 export type KnownTraceEventType = (typeof TRACE_EVENT_TYPES)[number];
@@ -25,6 +26,7 @@ export const TRACE_NODE_IDS = [
   "plan-and-execute",
   "reflect:react",
   "summary",
+  "team",
 ] as const;
 
 export type TraceNodeId = (typeof TRACE_NODE_IDS)[number] | (string & {});
@@ -38,6 +40,9 @@ export const traceEventSchema = z
     tools: z.array(z.string()).optional(),
     args: z.record(z.string(), z.unknown()).optional(),
     approved: z.boolean().optional(),
+    from: z.string().optional(),
+    to: z.string().optional(),
+    brief: z.string().optional(),
   })
   .passthrough();
 

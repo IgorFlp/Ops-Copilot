@@ -36,6 +36,15 @@ export const sampleTrace = [
     timestamp: "2026-11-10T12:00:00.800Z",
   },
   {
+    type: "handoff",
+    content: "supervisor → analista: Diagnostique os alertas.",
+    node: "team",
+    timestamp: "2026-11-10T12:00:00.900Z",
+    from: "supervisor",
+    to: "analista",
+    brief: "Diagnostique os alertas.",
+  },
+  {
     type: "custom_event",
     content: "raw payload",
     node: "react",
