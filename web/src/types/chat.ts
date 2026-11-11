@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { traceEventSchema, type TraceEvent } from "./trace";
 
-export const STRATEGIES = ["react", "plan-and-execute", "reflect:react"] as const;
+export const STRATEGIES = ["react", "plan-and-execute", "reflect:react", "team"] as const;
 
 export type Strategy = (typeof STRATEGIES)[number];
 
